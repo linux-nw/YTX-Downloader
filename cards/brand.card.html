@@ -1,0 +1,47 @@
+<!-- @dsCard group="Brand" viewport="700x200" name="Brand Assets" subtitle="Mark, wordmark, gradient — Vela identity" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:24px;font-family:var(--font-sans)}
+.row{display:flex;align-items:center;gap:32px;flex-wrap:wrap}
+.asset{display:flex;flex-direction:column;align-items:center;gap:10px}
+.label{font:var(--type-caption);color:var(--vela-text-3)}
+.on-light{background:var(--slate-100);border-radius:var(--radius-md);padding:16px 24px;display:flex;align-items:center;justify-content:center}
+.grad-pill{height:44px;width:200px;border-radius:var(--radius-full);background:var(--vela-gradient)}
+.grad-soft{height:44px;width:200px;border-radius:var(--radius-full);background:var(--vela-gradient-soft);border:1px solid var(--vela-border)}
+.app-name{font:var(--weight-bold) 28px/1 var(--font-sans);letter-spacing:var(--tracking-snug);color:var(--vela-text)}
+</style>
+</head>
+<body class="vela-root">
+  <div class="row">
+    <div class="asset">
+      <img src="../assets/vela-mark.svg" width="56" height="56" alt="Vela mark"/>
+      <span class="label">Mark · dark</span>
+    </div>
+    <div class="asset">
+      <div class="on-light"><img src="../assets/vela-mark-mono.svg" width="48" height="48" alt="Vela mark mono"/></div>
+      <span class="label">Mark · light bg</span>
+    </div>
+    <div class="asset">
+      <img src="../assets/vela-wordmark.svg" width="140" height="40" alt="Vela wordmark"/>
+      <span class="label">Wordmark · dark</span>
+    </div>
+    <div class="asset">
+      <div class="app-name">Vela</div>
+      <span class="label">App name · type</span>
+    </div>
+    <div class="asset">
+      <div class="grad-pill"></div>
+      <span class="label">Gradient · full</span>
+    </div>
+    <div class="asset">
+      <div class="grad-soft"></div>
+      <span class="label">Gradient · soft</span>
+    </div>
+  </div>
+</body>
+</html>

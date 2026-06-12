@@ -1,0 +1,38 @@
+<!-- @dsCard group="Spacing" viewport="700x160" name="Motion Tokens" subtitle="Durations & easings — calm, purposeful" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:20px;font-family:var(--font-sans)}
+h3{font:var(--type-caption);color:var(--vela-text-3);text-transform:uppercase;letter-spacing:var(--tracking-caps);margin:0 0 12px}
+.row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+.token{background:var(--vela-surface-2);border:1px solid var(--vela-border);border-radius:var(--radius-sm);padding:8px 12px;display:flex;flex-direction:column;gap:3px}
+.name{font:var(--type-label);color:var(--vela-text)}
+.val{font:var(--type-data);color:var(--vela-text-3)}
+.demo-row{display:flex;align-items:center;gap:16px}
+.demo-box{width:28px;height:28px;background:var(--vela-primary);border-radius:var(--radius-sm)}
+.demo-box:hover{transform:scale(1.2) rotate(8deg)}
+.ease-label{font:var(--type-caption);color:var(--vela-text-3)}
+</style>
+</head>
+<body class="vela-root">
+  <h3>Duration tokens</h3>
+  <div class="row">
+    <div class="token"><span class="name">--dur-instant</span><span class="val">80ms</span></div>
+    <div class="token"><span class="name">--dur-fast</span><span class="val">120ms</span></div>
+    <div class="token"><span class="name">--dur-base</span><span class="val">200ms</span></div>
+    <div class="token"><span class="name">--dur-slow</span><span class="val">320ms</span></div>
+    <div class="token"><span class="name">--dur-enter</span><span class="val">240ms</span></div>
+    <div class="token"><span class="name">--dur-exit</span><span class="val">160ms</span></div>
+  </div>
+  <h3>Easing tokens — hover each box</h3>
+  <div class="demo-row">
+    <div class="demo-box" style="transition:transform var(--dur-base) var(--ease-out,ease-out)"></div><span class="ease-label">ease-out (exit/fade)</span>
+    <div class="demo-box" style="transition:transform var(--dur-base) var(--ease-in-out,ease-in-out);background:var(--vela-secondary)"></div><span class="ease-label">ease-in-out (cross)</span>
+    <div class="demo-box" style="transition:transform var(--dur-base) cubic-bezier(0.34,1.56,0.64,1);background:var(--vela-success)"></div><span class="ease-label">spring (micro)</span>
+  </div>
+</body>
+</html>

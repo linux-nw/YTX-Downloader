@@ -1,0 +1,74 @@
+<!-- @dsCard group="Components" viewport="700x310" name="Feedback" subtitle="ProgressBar, Badge, Spinner — status & state" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:20px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.lbl{font:var(--type-caption);color:var(--vela-text-3);width:74px;text-align:right;text-transform:uppercase;letter-spacing:var(--tracking-caps);flex-shrink:0}
+.col{display:flex;flex-direction:column;gap:8px;flex:1}
+hr{border:none;border-top:1px solid var(--vela-border-subtle);margin:12px 0}
+</style>
+</head>
+<body class="vela-root">
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel">
+    const { ProgressBar, Badge, Spinner } = window.VelaDesignSystem_f6c677;
+
+    function Demo() {
+      const [prog, setProg] = React.useState(67);
+      React.useEffect(()=>{
+        const t=setInterval(()=>setProg(p=>p>=100?0:p+0.6),60);
+        return ()=>clearInterval(t);
+      },[]);
+
+      return (<div>
+        <div className="row">
+          <span className="lbl">Progress</span>
+          <div className="col">
+            <ProgressBar value={prog} color="gradient" size="md" label="Downloading…" showValue/>
+            <ProgressBar value={prog} color="primary" size="sm"/>
+            <ProgressBar value={100} color="success" size="sm" label="Complete"/>
+            <ProgressBar value={40} color="secondary" size="xs" indeterminate label="Processing…"/>
+          </div>
+        </div>
+        <hr/>
+        <div className="row">
+          <span className="lbl">Badge</span>
+          <Badge variant="primary">Primary</Badge>
+          <Badge variant="secondary">Secondary</Badge>
+          <Badge variant="success">Done</Badge>
+          <Badge variant="warning">Queued</Badge>
+          <Badge variant="danger">Error</Badge>
+          <Badge variant="info">Info</Badge>
+          <Badge variant="default">Default</Badge>
+          <Badge variant="video">MP4</Badge>
+          <Badge variant="audio">MP3</Badge>
+        </div>
+        <div className="row">
+          <span className="lbl">Sizes</span>
+          <Badge variant="primary" size="sm">Small</Badge>
+          <Badge variant="primary" size="md">Medium</Badge>
+          <Badge variant="primary" size="lg">Large</Badge>
+        </div>
+        <hr/>
+        <div className="row">
+          <span className="lbl">Spinner</span>
+          <Spinner size="xs" color="muted"/>
+          <Spinner size="sm" color="primary"/>
+          <Spinner size="md" color="secondary"/>
+          <Spinner size="lg" color="primary"/>
+        </div>
+      </div>);
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+  </script>
+</body>
+</html>

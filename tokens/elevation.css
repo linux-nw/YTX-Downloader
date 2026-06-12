@@ -1,0 +1,25 @@
+/* ============================================================
+   Vela — Elevation: shadows, rings, glows (tuned for dark UI)
+   ============================================================ */
+
+:root {
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.30);
+  --shadow-sm: 0 2px 6px oklch(0 0 0 / 0.32);
+  --shadow-md: 0 6px 16px oklch(0 0 0 / 0.38);
+  --shadow-lg: 0 14px 36px oklch(0 0 0 / 0.46);
+  --shadow-pop: 0 10px 30px oklch(0 0 0 / 0.50);
+
+  /* Inset for wells / pressed inputs */
+  --shadow-inset: inset 0 1px 2px oklch(0 0 0 / 0.35);
+
+  /* Hairline top highlight that sells the "raised" look on dark */
+  --edge-highlight: inset 0 1px 0 oklch(1 0 0 / 0.05); /* @kind shadow */
+
+  /* Focus ring */
+  --ring-focus: 0 0 0 3px var(--vela-focus);
+
+  /* Accent glow deaktiviert für ein schlichteres, ruhigeres Bild.
+     No-op-Schatten, damit zusammengesetzte box-shadow-Listen gültig bleiben. */
+  --glow-primary: 0 0 0 0 transparent;
+  --glow-secondary: 0 0 0 0 transparent;
+}

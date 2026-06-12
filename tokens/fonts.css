@@ -1,0 +1,9 @@
+/* ============================================================
+   Vela — Webfonts
+   Hanken Grotesk (UI / display) + JetBrains Mono (numeric data).
+   NOTE: loaded from Google Fonts CDN for this design-system demo.
+   For production, self-host the .woff2 files and replace this
+   @import with local @font-face rules.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');

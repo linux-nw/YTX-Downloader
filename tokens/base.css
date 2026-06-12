@@ -1,0 +1,43 @@
+/* ============================================================
+   Vela — Base resets & helpers (safe, minimal)
+   ============================================================ */
+
+.vela-root,
+:root {
+  color-scheme: dark;
+}
+
+body.vela-root {
+  margin: 0;
+  background: var(--vela-bg);
+  color: var(--vela-text);
+  font: var(--type-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'ss01', 'cv01';
+}
+
+.vela-root *,
+.vela-root *::before,
+.vela-root *::after {
+  box-sizing: border-box;
+}
+
+/* Mono numerals align nicely */
+.vela-data {
+  font: var(--type-data);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-snug);
+}
+
+/* Eyebrow / overline */
+.vela-eyebrow {
+  font: var(--type-caption);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--vela-text-3);
+}
+
+::selection {
+  background: var(--vela-primary-soft);
+}

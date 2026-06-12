@@ -1,0 +1,31 @@
+<!-- @dsCard group="Spacing" viewport="700x200" name="Elevation & Shadows" subtitle="Dark-tuned shadow scale + focus rings + glows" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:28px 24px;font-family:var(--font-sans)}
+.row{display:flex;gap:16px;align-items:flex-end}
+.card{background:var(--vela-surface-2);border-radius:var(--radius-md);padding:14px 12px 10px;display:flex;flex-direction:column;align-items:center;gap:10px;min-width:90px}
+.label{font:var(--type-caption);color:var(--vela-text-3)}
+.focus{outline:none;border:1.5px solid var(--vela-primary-line);box-shadow:var(--ring-focus)}
+.glow-p{box-shadow:var(--glow-primary)}
+.glow-s{box-shadow:var(--glow-secondary)}
+</style>
+</head>
+<body class="vela-root">
+  <div class="row">
+    <div class="card" style="box-shadow:var(--shadow-xs)"><span class="label">xs</span></div>
+    <div class="card" style="box-shadow:var(--shadow-sm)"><span class="label">sm</span></div>
+    <div class="card" style="box-shadow:var(--shadow-md)"><span class="label">md</span></div>
+    <div class="card" style="box-shadow:var(--shadow-lg)"><span class="label">lg</span></div>
+    <div class="card" style="box-shadow:var(--shadow-pop)"><span class="label">pop</span></div>
+    <div class="card focus"><span class="label">focus</span></div>
+    <div class="card glow-p" style="background:var(--vela-primary);"><span class="label" style="color:var(--vela-on-primary)">glow·p</span></div>
+    <div class="card glow-s" style="background:var(--vela-secondary);"><span class="label" style="color:#fff">glow·s</span></div>
+    <div class="card" style="box-shadow:var(--shadow-inset)"><span class="label">inset</span></div>
+  </div>
+</body>
+</html>

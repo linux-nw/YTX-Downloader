@@ -1,0 +1,68 @@
+<!-- @dsCard group="Components" viewport="700x520" name="App Components" subtitle="UrlBar, FormatToggle, PlaylistMode, DownloadRow" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:20px}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.lbl{font:var(--type-caption);color:var(--vela-text-3);width:82px;text-align:right;text-transform:uppercase;letter-spacing:var(--tracking-caps);flex-shrink:0}
+hr{border:none;border-top:1px solid var(--vela-border-subtle);margin:14px 0}
+.full{flex:1}
+.stack{display:flex;flex-direction:column;gap:6px;flex:1}
+</style>
+</head>
+<body class="vela-root">
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel">
+    const { UrlBar, FormatToggle, PlaylistMode, DownloadRow } = window.VelaDesignSystem_f6c677;
+
+    function Demo(){
+      const [url, setUrl] = React.useState('');
+      const [url2, setUrl2] = React.useState('https://youtu.be/dQw4w9WgXcQ');
+      const [fmt, setFmt] = React.useState('video');
+      const [pm, setPm] = React.useState('split');
+      const [prog, setProg] = React.useState(58);
+
+      React.useEffect(()=>{
+        const t = setInterval(()=>setProg(p=>p>=100?5:p+0.8),80);
+        return ()=>clearInterval(t);
+      },[]);
+
+      return (<div>
+        <div className="row"><span className="lbl">UrlBar</span>
+          <div className="full"><UrlBar value={url} onChange={setUrl} placeholder="Paste a video or playlist URL…"/></div>
+        </div>
+        <div className="row"><span className="lbl">Filled</span>
+          <div className="full"><UrlBar value={url2} onChange={setUrl2}/></div>
+        </div>
+        <hr/>
+        <div className="row"><span className="lbl">Format</span>
+          <FormatToggle value={fmt} onChange={setFmt}/>
+          <FormatToggle value="audio" onChange={()=>{}}/>
+        </div>
+        <hr/>
+        <div className="row"><span className="lbl">Playlist</span>
+          <div style={{flex:1}}><PlaylistMode mode={pm} onChange={setPm}/></div>
+        </div>
+        <hr/>
+        <div className="row" style={{alignItems:'flex-start'}}><span className="lbl" style={{marginTop:10}}>Download</span>
+          <div className="stack">
+            <DownloadRow filename="Interstellar Official Soundtrack — Hans Zimmer.mp3" format="audio" status="downloading" progress={prog} speed="2.4 MB" filesize="312 MB"/>
+            <DownloadRow filename="How to Build a PC in 2025 [Full Guide].mp4" format="video" status="done" progress={100} filesize="1.8 GB" onOpenFolder={()=>{}}/>
+            <DownloadRow filename="Lo-Fi Beats for Study — Full Album.mp3" format="audio" status="queued"/>
+            <DownloadRow filename="Short Film — The Last Signal.mp4" format="video" status="error" onRetry={()=>{}} onRemove={()=>{}}/>
+          </div>
+        </div>
+      </div>);
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+  </script>
+</body>
+</html>

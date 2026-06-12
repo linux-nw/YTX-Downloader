@@ -1,0 +1,87 @@
+<!-- @dsCard group="Components" viewport="700x400" name="Forms" subtitle="Input, SegmentedControl, Switch, Checkbox, Select" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:20px}
+.section{margin-bottom:18px}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.lbl{font:var(--type-caption);color:var(--vela-text-3);width:74px;text-align:right;text-transform:uppercase;letter-spacing:var(--tracking-caps);flex-shrink:0}
+.col{display:flex;flex-direction:column;gap:8px}
+.divider{border:none;border-top:1px solid var(--vela-border-subtle);margin:14px 0}
+</style>
+</head>
+<body class="vela-root">
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script type="text/babel">
+    const { Input, SegmentedControl, Switch, Checkbox, Select } = window.VelaDesignSystem_f6c677;
+    const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>;
+    const LinkIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>;
+
+    function Demo() {
+      const [inp1, setInp1] = React.useState('');
+      const [inp2, setInp2] = React.useState('');
+      const [seg1, setSeg1] = React.useState('video');
+      const [seg2, setSeg2] = React.useState('1080p');
+      const [sw1, setSw1] = React.useState(true);
+      const [sw2, setSw2] = React.useState(false);
+      const [cb1, setCb1] = React.useState(true);
+      const [cb2, setCb2] = React.useState(false);
+      const [sel, setSel] = React.useState('mp4');
+
+      return (
+        <div>
+          <div className="section">
+            <div className="row">
+              <span className="lbl">Input</span>
+              <div style={{width:220}}><Input value={inp1} onChange={setInp1} placeholder="Search or paste URL…" prefix={<SearchIcon/>}/></div>
+              <div style={{width:200}}><Input value={inp2} onChange={setInp2} placeholder="Output folder" error={inp2.length>0&&!inp2.startsWith('/')?'Must be absolute path':''} hint="Where files are saved"/></div>
+              <div style={{width:160}}><Input value="" placeholder="Disabled" disabled/></div>
+            </div>
+          </div>
+          <hr className="divider"/>
+          <div className="row">
+            <span className="lbl">Segmented</span>
+            <SegmentedControl value={seg1} onChange={setSeg1} options={[{value:'video',label:'Video'},{value:'audio',label:'Audio'}]}/>
+            <SegmentedControl value={seg2} onChange={setSeg2} options={[{value:'720p',label:'720p'},{value:'1080p',label:'1080p'},{value:'4k',label:'4K'}]} size="sm"/>
+            <SegmentedControl value="b" onChange={()=>{}} options={[{value:'a',label:'Option A'},{value:'b',label:'Option B'},{value:'c',label:'Option C'}]} color="secondary"/>
+          </div>
+          <hr className="divider"/>
+          <div className="row">
+            <span className="lbl">Switch</span>
+            <Switch checked={sw1} onChange={setSw1} label="Auto-download"/>
+            <Switch checked={sw2} onChange={setSw2} label="Notifications" size="sm"/>
+            <Switch checked={false} onChange={()=>{}} label="Disabled" disabled/>
+          </div>
+          <hr className="divider"/>
+          <div className="row">
+            <span className="lbl">Checkbox</span>
+            <Checkbox checked={cb1} onChange={setCb1} label="Keep original quality"/>
+            <Checkbox checked={cb2} onChange={setCb2} label="Embed metadata"/>
+            <Checkbox checked={true} indeterminate={true} onChange={()=>{}} label="Indeterminate"/>
+            <Checkbox checked={false} onChange={()=>{}} label="Disabled" disabled/>
+          </div>
+          <hr className="divider"/>
+          <div className="row">
+            <span className="lbl">Select</span>
+            <div style={{width:180}}>
+              <Select value={sel} onChange={setSel} label="Container" options={[{value:'mp4',label:'MP4 (H.264)'},{value:'webm',label:'WebM (VP9)'},{value:'mkv',label:'MKV'},{value:'mp3',label:'MP3'},{value:'m4a',label:'M4A (AAC)'}]}/>
+            </div>
+            <div style={{width:160}}>
+              <Select value="" onChange={()=>{}} placeholder="Select quality…" options={[{value:'1080',label:'1080p'},{value:'720',label:'720p'},{value:'480',label:'480p'}]} disabled/>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+  </script>
+</body>
+</html>

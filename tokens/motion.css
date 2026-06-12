@@ -1,0 +1,28 @@
+/* ============================================================
+   Vela — Motion tokens
+   Calm, quick, no bounce. Ease-out for entrances.
+   ============================================================ */
+
+:root {
+  --dur-instant: 80ms;  /* @kind other */
+  --dur-fast:    140ms; /* @kind other */
+  --dur-base:    200ms; /* @kind other */
+  --dur-slow:    320ms; /* @kind other */
+  --dur-slower:  500ms; /* @kind other */
+
+  --ease-out:    cubic-bezier(0.22, 0.8, 0.30, 1);  /* @kind other */
+  --ease-in-out: cubic-bezier(0.45, 0, 0.30, 1);    /* @kind other */
+  --ease-in:     cubic-bezier(0.5, 0, 0.9, 0.4);    /* @kind other */
+  /* Gentle overshoot — used sparingly (e.g. checkmark pop) */
+  --ease-emphasis: cubic-bezier(0.30, 1.4, 0.50, 1); /* @kind other */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-instant: 0ms; /* @kind other */
+    --dur-fast: 0ms; /* @kind other */
+    --dur-base: 0ms; /* @kind other */
+    --dur-slow: 0ms; /* @kind other */
+    --dur-slower: 0ms; /* @kind other */
+  }
+}

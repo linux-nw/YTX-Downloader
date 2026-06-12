@@ -1,0 +1,33 @@
+<!-- @dsCard group="Type" viewport="700x380" name="Type Scale" subtitle="Hanken Grotesk + JetBrains Mono" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<link rel="stylesheet" href="../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:20px;font-family:var(--font-sans)}
+.row{display:grid;grid-template-columns:72px 1fr;gap:2px 14px;align-items:baseline;margin-bottom:2px}
+.lbl{font:var(--type-caption);color:var(--vela-text-3);text-align:right;text-transform:uppercase;letter-spacing:var(--tracking-caps);padding:3px 0}
+.sample{color:var(--vela-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.divider{border:none;border-top:1px solid var(--vela-border-subtle);margin:14px 0 12px}
+.mono-row{display:flex;flex-direction:column;gap:3px}
+.mono{font-family:var(--font-mono);color:var(--vela-text-2);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body class="vela-root">
+  <div class="row"><span class="lbl">Display</span><div class="sample" style="font:var(--type-2xl)">The quick brown fox</div></div>
+  <div class="row"><span class="lbl">Title</span><div class="sample" style="font:var(--type-xl)">The quick brown fox jumps</div></div>
+  <div class="row"><span class="lbl">Heading</span><div class="sample" style="font:var(--type-lg)">The quick brown fox jumps over the lazy dog</div></div>
+  <div class="row"><span class="lbl">Body</span><div class="sample" style="font:var(--type-base)">The quick brown fox jumps over the lazy dog and keeps running</div></div>
+  <div class="row"><span class="lbl">Label</span><div class="sample" style="font:var(--type-sm)">Medium weight · used for buttons, labels, navigation items</div></div>
+  <div class="row"><span class="lbl">Caption</span><div class="sample" style="font:var(--type-xs)">Regular weight · timestamps, hints, secondary metadata</div></div>
+  <div class="row"><span class="lbl">Eyebrow</span><div class="sample" style="font:var(--type-caption);text-transform:uppercase;letter-spacing:var(--tracking-caps);color:var(--vela-text-3)">SECTION LABEL · UPPERCASE · TRACKING</div></div>
+  <hr class="divider"/>
+  <div class="mono-row">
+    <div class="mono" style="font-size:var(--text-lg)">1920×1080 · 48.0 kHz · 256 kbps · 12.4 MB/s</div>
+    <div class="mono" style="font-size:var(--text-base)">https://youtube.com/watch?v=a1b2c3d4e5f&t=120</div>
+    <div class="mono" style="font-size:var(--text-sm);color:var(--vela-text-3)">03:42 remaining · 67% · 384.2 MB of 572.1 MB</div>
+  </div>
+</body>
+</html>

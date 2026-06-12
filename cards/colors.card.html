@@ -1,0 +1,64 @@
+<!-- @dsCard group="Colors" viewport="700x520" name="Color Palette" subtitle="Teal, indigo, slate + semantic aliases" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="stylesheet" href="../styles.css"/>
+<style>
+html,body{margin:0}
+body{background:var(--vela-bg);padding:24px;font-family:var(--font-sans)}
+h3{font:var(--type-caption);color:var(--vela-text-3);text-transform:uppercase;letter-spacing:var(--tracking-caps);margin:0 0 8px}
+.row{display:flex;gap:6px;margin-bottom:18px}
+.swatch{flex:1;border-radius:var(--radius-md);aspect-ratio:1;display:flex;align-items:flex-end;justify-content:center;padding:6px;font:var(--type-caption);color:var(--vela-text-3)}
+.swatch.lg{aspect-ratio:1.6;min-height:48px}
+.aliases{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px}
+.alias{height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font:var(--type-caption);border:1px solid var(--vela-border)}
+</style>
+</head>
+<body class="vela-root">
+  <h3>Teal</h3>
+  <div class="row">
+    <div class="swatch lg" style="background:var(--teal-300)">300</div>
+    <div class="swatch lg" style="background:var(--teal-400)">400</div>
+    <div class="swatch lg" style="background:var(--teal-500)">500</div>
+    <div class="swatch lg" style="background:var(--teal-600)">600</div>
+    <div class="swatch lg" style="background:var(--teal-700)">700</div>
+  </div>
+  <h3>Indigo</h3>
+  <div class="row">
+    <div class="swatch lg" style="background:var(--indigo-300)">300</div>
+    <div class="swatch lg" style="background:var(--indigo-400)">400</div>
+    <div class="swatch lg" style="background:var(--indigo-500)">500</div>
+    <div class="swatch lg" style="background:var(--indigo-600)">600</div>
+    <div class="swatch lg" style="background:var(--indigo-700)">700</div>
+  </div>
+  <h3>Slate</h3>
+  <div class="row">
+    <div class="swatch" style="background:var(--slate-050);color:#222">050</div>
+    <div class="swatch" style="background:var(--slate-100);color:#222">100</div>
+    <div class="swatch" style="background:var(--slate-200);color:#222">200</div>
+    <div class="swatch" style="background:var(--slate-300);color:#222">300</div>
+    <div class="swatch" style="background:var(--slate-400)">400</div>
+    <div class="swatch" style="background:var(--slate-500)">500</div>
+    <div class="swatch" style="background:var(--slate-600)">600</div>
+    <div class="swatch" style="background:var(--slate-700)">700</div>
+    <div class="swatch" style="background:var(--slate-800)">800</div>
+    <div class="swatch" style="background:var(--slate-850)">850</div>
+    <div class="swatch" style="background:var(--slate-900)">900</div>
+    <div class="swatch" style="background:var(--slate-950)">950</div>
+  </div>
+  <h3>Semantic</h3>
+  <div class="aliases">
+    <div class="alias" style="background:var(--vela-primary);color:#fff">primary</div>
+    <div class="alias" style="background:var(--vela-secondary);color:#fff">secondary</div>
+    <div class="alias" style="background:var(--vela-bg)">bg</div>
+    <div class="alias" style="background:var(--vela-surface-1)">surface-1</div>
+    <div class="alias" style="background:var(--vela-surface-2)">surface-2</div>
+    <div class="alias" style="background:var(--vela-surface-3)">surface-3</div>
+    <div class="alias" style="background:var(--vela-success);color:#fff">success</div>
+    <div class="alias" style="background:var(--vela-warning);color:#222">warning</div>
+    <div class="alias" style="background:var(--vela-danger);color:#fff">danger</div>
+  </div>
+</body>
+</html>

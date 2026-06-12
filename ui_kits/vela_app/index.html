@@ -1,0 +1,395 @@
+<!-- @dsCard group="App" viewport="1200x720" name="Vela App" subtitle="Interactive prototype — Windows 11 download manager" -->
+<!-- @startingPoint section="App" subtitle="Full-featured video/audio downloader for Windows 11" viewport="1200x720" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="stylesheet" href="../../styles.css"/>
+<style>
+html,body{margin:0;height:100%;overflow:hidden}
+/* ── App shell ── */
+.app{height:100vh;display:flex;flex-direction:column;background:var(--vela-bg);background-image:var(--vela-mica);overflow:hidden}
+/* ── Titlebar ── */
+.titlebar{height:var(--titlebar-h);background:var(--vela-titlebar);backdrop-filter:blur(20px);display:flex;align-items:center;border-bottom:1px solid var(--vela-border-subtle);flex-shrink:0;z-index:20}
+.tb-brand{display:flex;align-items:center;gap:8px;padding:0 14px}
+.tb-name{font:var(--weight-semibold) 13px/1 var(--font-sans);color:var(--vela-text);letter-spacing:var(--tracking-snug)}
+.tb-tabs{display:flex;height:100%;margin-left:4px}
+.tb-tab{height:100%;padding:0 16px;background:transparent;border:none;color:var(--vela-text-3);font:var(--type-sm);cursor:pointer;border-bottom:2px solid transparent;transition:color 120ms,border-color 120ms}
+.tb-tab:hover{color:var(--vela-text-2)}
+.tb-tab.active{color:var(--vela-text);border-bottom-color:var(--vela-primary)}
+.tb-space{flex:1}
+.tb-wc{display:flex;height:100%}
+.tc{width:46px;height:100%;border:none;background:transparent;color:var(--vela-text-3);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 80ms,color 80ms}
+.tc:hover{background:var(--vela-surface-3);color:var(--vela-text)}
+.tc-x:hover{background:var(--vela-danger)!important;color:#fff!important}
+/* ── Content ── */
+.content{flex:1;overflow:hidden;display:flex;flex-direction:column;padding:20px 24px;gap:16px;max-width:880px;width:100%;margin:0 auto;box-sizing:border-box}
+/* ── Input card ── */
+.input-card{background:var(--vela-surface);border:1px solid var(--vela-border);border-radius:var(--radius-xl);padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow-sm)}
+.opts-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pl-anim{animation:slide-in 200ms ease-out}
+@keyframes slide-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+/* ── Downloads ── */
+.dl-section{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+.dl-header{display:flex;align-items:center;gap:10px;padding:0 2px 10px;flex-shrink:0}
+.dl-htitle{font:var(--type-caption);color:var(--vela-text-3);text-transform:uppercase;letter-spacing:var(--tracking-caps)}
+.dl-clear{background:transparent;border:none;color:var(--vela-text-3);font:var(--type-caption);cursor:pointer;padding:3px 8px;border-radius:var(--radius-sm);transition:background 100ms,color 100ms}
+.dl-clear:hover{background:var(--vela-danger-soft);color:var(--vela-danger)}
+.dl-list{display:flex;flex-direction:column;gap:6px;overflow-y:auto;padding-right:4px}
+.dl-list::-webkit-scrollbar{width:4px}
+.dl-list::-webkit-scrollbar-thumb{background:var(--vela-border);border-radius:999px}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--vela-text-3);padding:40px}
+.empty p{font:var(--type-body);margin:0;text-align:center;max-width:280px}
+/* ── Status bar ── */
+.sbar{height:24px;background:var(--vela-surface);border-top:1px solid var(--vela-border-subtle);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
+.sb-txt{font:var(--type-caption);color:var(--vela-text-3);display:flex;align-items:center;gap:5px}
+
+/* ──────────────────────────────────────────
+   Component styles (self-contained)
+────────────────────────────────────────── */
+/* Button */
+.vbtn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:var(--control-md);padding:0 16px;font:var(--weight-semibold) var(--text-base)/1 var(--font-sans);letter-spacing:var(--tracking-snug);border:1px solid transparent;border-radius:var(--radius-md);cursor:pointer;white-space:nowrap;transition:background 120ms,color 120ms,transform 80ms,box-shadow 120ms}
+.vbtn:active{transform:translateY(.5px) scale(.985)}
+.vbtn[disabled]{opacity:.45;cursor:not-allowed;transform:none}
+.vbtn:focus-visible{outline:none;box-shadow:var(--ring-focus)}
+.vbtn.primary{background:var(--vela-primary);color:var(--vela-on-primary);box-shadow:var(--glow-primary),var(--edge-highlight)}
+.vbtn.primary:hover:not([disabled]){background:var(--vela-primary-hover)}
+.vbtn.neutral{background:var(--vela-surface-3);color:var(--vela-text);border-color:var(--vela-border);box-shadow:var(--edge-highlight)}
+.vbtn.neutral:hover:not([disabled]){background:var(--vela-overlay,#2e3140);border-color:var(--vela-border-strong)}
+.vbtn svg{width:16px;height:16px;flex-shrink:0}
+
+/* Badge */
+.vbadge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;white-space:nowrap;font-weight:500;letter-spacing:.02em;font-size:11px;padding:3px 9px}
+.vbadge.primary{background:var(--vela-primary-soft);color:var(--teal-300)}
+.vbadge.success{background:var(--vela-success-soft);color:var(--vela-success)}
+.vbadge.danger{background:var(--vela-danger-soft);color:var(--vela-danger)}
+.vbadge.video{background:var(--vela-primary-soft);color:var(--vela-video)}
+.vbadge.audio{background:var(--vela-secondary-soft);color:var(--vela-audio)}
+.vbadge.default{background:var(--vela-surface-3);color:var(--vela-text-2)}
+
+/* Spinner */
+@keyframes vela-spin{to{transform:rotate(360deg)}}
+.vspin{display:inline-flex;align-items:center;justify-content:center;animation:vela-spin .72s linear infinite;flex-shrink:0}
+.vspin.xs svg{width:12px;height:12px}
+.vspin.sm svg{width:16px;height:16px}
+.vspin.md svg{width:22px;height:22px}
+.vspin.primary{color:var(--vela-primary)}
+.vspin.muted{color:var(--vela-text-3)}
+
+/* Select */
+.vsel-wrap{position:relative}
+.vsel{appearance:none;-webkit-appearance:none;width:100%;background:var(--vela-surface-3);border:1px solid var(--vela-border);border-radius:var(--radius-md);color:var(--vela-text);font:var(--type-body);padding:0 32px 0 12px;height:var(--control-md);cursor:pointer;outline:none;transition:border-color 120ms,box-shadow 120ms}
+.vsel:focus{border-color:var(--vela-primary-line);box-shadow:var(--ring-focus)}
+.vsel-arr{position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--vela-text-3)}
+
+/* Switch */
+.vsw{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.vsw.dis{opacity:.45;pointer-events:none}
+.vsw-track{position:relative;width:36px;height:20px;border-radius:999px;background:var(--vela-surface-3);border:1px solid var(--vela-border);transition:background 150ms,border-color 150ms;flex-shrink:0}
+.vsw-thumb{position:absolute;top:50%;width:14px;height:14px;border-radius:50%;background:var(--slate-400);box-shadow:0 1px 3px oklch(0 0 0/.4);transform:translateY(-50%);left:2px;transition:left 150ms cubic-bezier(.34,1.4,.64,1),background 150ms}
+.vsw.on .vsw-track{background:var(--vela-primary);border-color:var(--vela-primary)}
+.vsw.on .vsw-thumb{left:calc(100% - 16px);background:#fff}
+.vsw-lbl{font:var(--type-sm);color:var(--vela-text-2)}
+.vsw-inp{position:absolute;opacity:0;width:0;height:0}
+
+/* Input */
+.vinp-wrap{display:flex;flex-direction:column;gap:5px}
+.vinp-lbl{font:var(--type-caption);color:var(--vela-text-3);text-transform:uppercase;letter-spacing:var(--tracking-caps)}
+.vinp-field{display:flex;align-items:center;background:var(--vela-surface-3);border:1px solid var(--vela-border);border-radius:var(--radius-md);height:var(--control-md);overflow:hidden;transition:border-color 120ms,box-shadow 120ms}
+.vinp-field:focus-within{border-color:var(--vela-primary-line);box-shadow:var(--ring-focus)}
+.vinp{flex:1;background:transparent;border:none;outline:none;color:var(--vela-text);font:var(--type-body);padding:0 12px}
+
+/* UrlBar */
+.vurl{display:flex;align-items:center;background:var(--vela-surface-2);border:1px solid var(--vela-border);border-radius:var(--radius-lg);overflow:hidden;transition:border-color 150ms,box-shadow 150ms;height:44px}
+.vurl:focus-within{border-color:var(--vela-primary-line);box-shadow:var(--ring-focus)}
+.vurl.filled{border-color:var(--vela-border-strong)}
+.vurl-inp{flex:1;background:transparent;border:none;outline:none;color:var(--vela-text);font-family:var(--font-mono);font-size:13px;padding:0 14px;min-width:0}
+.vurl-inp::placeholder{font-family:var(--font-sans);font-size:14px;color:var(--vela-text-3)}
+.vurl-clr{width:34px;height:100%;background:transparent;border:none;color:var(--vela-text-3);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:color 100ms}
+.vurl-clr:hover{color:var(--vela-danger)}
+.vurl-paste{display:flex;align-items:center;gap:6px;height:100%;padding:0 14px;background:var(--vela-surface-3);border:none;border-left:1px solid var(--vela-border);color:var(--vela-text-2);font:var(--type-sm);cursor:pointer;transition:background 120ms,color 120ms;flex-shrink:0}
+.vurl-paste:hover{background:var(--vela-primary-soft);color:var(--vela-primary)}
+.vurl-paste svg,.vurl-clr svg{width:15px;height:15px}
+
+/* FormatToggle */
+.vft{display:inline-flex;background:var(--vela-surface-3);border-radius:var(--radius-md);padding:3px;gap:2px;border:1px solid var(--vela-border-subtle)}
+.vft-btn{display:flex;align-items:center;gap:7px;border:none;background:transparent;cursor:pointer;border-radius:calc(var(--radius-md) - 2px);padding:0 16px;height:32px;font:var(--type-sm);font-weight:500;color:var(--vela-text-3);transition:background 120ms,color 120ms,box-shadow 120ms}
+.vft-btn:hover:not(.on){background:var(--vela-surface-2);color:var(--vela-text-2)}
+.vft-btn.on.vid{background:var(--vela-video);color:var(--vela-on-primary);box-shadow:var(--shadow-sm),var(--glow-primary)}
+.vft-btn.on.aud{background:var(--vela-audio);color:oklch(0.17 .02 280);box-shadow:var(--shadow-sm),var(--glow-secondary)}
+.vft-btn svg{width:15px;height:15px;flex-shrink:0}
+.vft-tag{font-size:9px;font-weight:700;letter-spacing:.07em;background:oklch(0 0 0/.22);padding:1px 4px;border-radius:3px}
+
+/* PlaylistMode */
+.vpm{display:flex;flex-direction:column;gap:6px}
+.vpm-lbl{font:var(--type-caption);color:var(--vela-text-3);text-transform:uppercase;letter-spacing:var(--tracking-caps)}
+.vpm-opts{display:flex;gap:6px}
+.vpm-opt{flex:1;display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--vela-surface-2);border:1.5px solid var(--vela-border);border-radius:var(--radius-md);cursor:pointer;transition:border-color 150ms,background 150ms;user-select:none}
+.vpm-opt:hover:not(.on){border-color:var(--vela-border-strong)}
+.vpm-opt.on{border-color:var(--vela-primary-line);background:var(--vela-primary-soft)}
+.vpm-ico{width:32px;height:32px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;background:var(--vela-surface-3);flex-shrink:0;color:var(--vela-text-3);transition:background 150ms,color 150ms}
+.vpm-opt.on .vpm-ico{background:var(--vela-primary);color:var(--vela-on-primary)}
+.vpm-ico svg{width:16px;height:16px}
+.vpm-name{font:var(--type-sm);color:var(--vela-text)}
+.vpm-desc{font:var(--type-xs);color:var(--vela-text-3);margin-top:2px}
+.vpm-dot{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--vela-border-strong);flex-shrink:0;margin-left:auto;display:flex;align-items:center;justify-content:center}
+.vpm-opt.on .vpm-dot{border-color:var(--vela-primary)}
+.vpm-dot-in{width:8px;height:8px;border-radius:50%;background:var(--vela-primary);opacity:0;transition:opacity 150ms}
+.vpm-opt.on .vpm-dot-in{opacity:1}
+
+/* DownloadRow */
+@keyframes vela-sweep{from{transform:translateX(-100%)}to{transform:translateX(220%)}}
+.vdlr{display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--vela-surface-2);border-radius:var(--radius-md);border:1px solid var(--vela-border-subtle);transition:background 150ms}
+.vdlr:hover{background:oklch(0.25 .018 257)}
+.vdlr-ico{width:36px;height:36px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.vdlr-ico.vid{background:var(--vela-primary-soft);color:var(--vela-video)}
+.vdlr-ico.aud{background:var(--vela-secondary-soft);color:var(--vela-audio)}
+.vdlr-ico svg{width:17px;height:17px}
+.vdlr-body{flex:1;min-width:0}
+.vdlr-name{font:var(--type-sm);color:var(--vela-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
+.vdlr-meta{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.vdlr-size{font-family:var(--font-mono);font-size:11px;color:var(--vela-text-3);font-variant-numeric:tabular-nums}
+.vdlr-st{font:var(--type-xs);color:var(--vela-text-3)}
+.vdlr-st.done{color:var(--vela-success)}
+.vdlr-st.error{color:var(--vela-danger)}
+.vdlr-st.downloading{color:var(--teal-400)}
+.vdlr-track{width:100%;height:3px;background:var(--vela-surface-3);border-radius:999px;overflow:hidden}
+.vdlr-fill{height:100%;border-radius:999px;transition:width 400ms ease-out;position:relative}
+.vdlr-fill.fv{background:var(--vela-gradient)}
+.vdlr-fill.fa{background:var(--vela-secondary)}
+.vdlr-fill.fd{background:var(--vela-success)}
+.vdlr-fill.fe{background:var(--vela-danger)}
+.vdlr-fill.fq{background:var(--vela-surface-3);overflow:hidden}
+.vdlr-fill.fq::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,var(--vela-primary),transparent);animation:vela-sweep 1.4s ease-in-out infinite}
+.vdlr-btns{display:flex;gap:3px;flex-shrink:0}
+.vdlr-btn{width:28px;height:28px;border-radius:var(--radius-sm);border:none;background:transparent;color:var(--vela-text-3);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 100ms,color 100ms}
+.vdlr-btn:hover{background:var(--vela-surface-3);color:var(--vela-text)}
+.vdlr-btn.danger:hover{background:var(--vela-danger-soft);color:var(--vela-danger)}
+.vdlr-btn svg{width:14px;height:14px}
+
+/* Settings */
+.settings{padding:4px 2px;display:flex;flex-direction:column;gap:20px;max-width:520px}
+.settings-section{display:flex;flex-direction:column;gap:10px}
+.settings-lbl{font:var(--type-caption);color:var(--vela-text-3);text-transform:uppercase;letter-spacing:var(--tracking-caps)}
+</style>
+</head>
+<body class="vela-root">
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel">
+/* ── Inline components (no bundle dependency) ── */
+
+function Button({variant='primary',disabled,onClick,children}){
+  return <button className={`vbtn ${variant}`} disabled={disabled} onClick={onClick}>{children}</button>;
+}
+
+function Badge({children,variant='default'}){
+  return <span className={`vbadge ${variant}`}>{children}</span>;
+}
+
+function Spinner({size='md',color='primary'}){
+  const r=9,c=2*Math.PI*r;
+  return <span className={`vspin ${size} ${color}`} role="status"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r={r} stroke="currentColor" strokeOpacity=".2" strokeWidth="2.5"/><circle cx="12" cy="12" r={r} stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c*.75}/></svg></span>;
+}
+
+function VelaSelect({value,onChange,options=[]}){
+  return <div className="vsel-wrap"><select className="vsel" value={value} onChange={e=>onChange(e.target.value)}>{options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select><span className="vsel-arr"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><polyline points="2,4 6,8 10,4"/></svg></span></div>;
+}
+
+function Switch({checked,onChange,label,disabled}){
+  return <label className={`vsw${checked?' on':''}${disabled?' dis':''}`}><input className="vsw-inp" type="checkbox" checked={checked} onChange={e=>onChange&&onChange(e.target.checked)} disabled={disabled}/><span className="vsw-track"><span className="vsw-thumb"/></span>{label&&<span className="vsw-lbl">{label}</span>}</label>;
+}
+
+function VelaInput({label,value,onChange,suffix}){
+  return <div className="vinp-wrap">{label&&<span className="vinp-lbl">{label}</span>}<div className="vinp-field"><input className="vinp" value={value} onChange={e=>onChange&&onChange(e.target.value)}/>{suffix}</div></div>;
+}
+
+function UrlBar({value,onChange,onPaste}){
+  const filled=value&&value.length>0;
+  async function paste(){
+    try{const t=await navigator.clipboard.readText();onChange&&onChange(t);onPaste&&onPaste(t);}catch{onPaste&&onPaste('');}
+  }
+  return <div className={`vurl${filled?' filled':''}`}>
+    <input className="vurl-inp" value={value} onChange={e=>onChange&&onChange(e.target.value)} placeholder="Paste a video or playlist URL…" spellCheck={false} autoComplete="off"/>
+    {filled&&<button className="vurl-clr" onClick={()=>onChange&&onChange('')} aria-label="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
+    <button className="vurl-paste" onClick={paste}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>Paste</button>
+  </div>;
+}
+
+function FormatToggle({value,onChange}){
+  return <div className="vft" role="group">
+    <button className={`vft-btn vid${value==='video'?' on':''}`} onClick={()=>onChange('video')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 8-6 4 6 4V8z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>Video<span className="vft-tag">MP4</span></button>
+    <button className={`vft-btn aud${value==='audio'?' on':''}`} onClick={()=>onChange('audio')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Audio<span className="vft-tag">MP3</span></button>
+  </div>;
+}
+
+function PlaylistMode({mode,onChange}){
+  const opts=[
+    {v:'single',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 8-6 4 6 4V8z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>,name:'Full playlist',desc:'One merged file'},
+    {v:'split',icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="4" rx="1"/><rect x="2" y="10" width="20" height="4" rx="1"/><rect x="2" y="17" width="20" height="4" rx="1"/></svg>,name:'Individual tracks',desc:'Separate files'},
+  ];
+  return <div className="vpm"><span className="vpm-lbl">Playlist mode</span><div className="vpm-opts">{opts.map(o=>(
+    <div key={o.v} className={`vpm-opt${mode===o.v?' on':''}`} onClick={()=>onChange(o.v)} role="radio" aria-checked={mode===o.v}>
+      <div className="vpm-ico">{o.icon}</div>
+      <div><div className="vpm-name">{o.name}</div><div className="vpm-desc">{o.desc}</div></div>
+      <div className="vpm-dot"><div className="vpm-dot-in"/></div>
+    </div>
+  ))}</div></div>;
+}
+
+function DownloadRow({filename,format,status,progress=0,filesize,speed,onRemove,onRetry,onOpenFolder}){
+  const pct=Math.min(100,Math.max(0,progress));
+  const label={queued:'In queue',downloading:speed?speed+' /s':(Math.round(pct)+'%'),done:'Complete',error:'Failed — retry?'}[status]||status;
+  const fillCls=status==='done'?'fd':status==='error'?'fe':status==='queued'?'fq':format==='audio'?'fa':'fv';
+  return <div className="vdlr">
+    <div className={`vdlr-ico ${format==='audio'?'aud':'vid'}`}>{format==='audio'
+      ?<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      :<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 8-6 4 6 4V8z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>}
+    </div>
+    <div className="vdlr-body">
+      <div className="vdlr-name" title={filename}>{filename}</div>
+      <div className="vdlr-meta">
+        {filesize&&<span className="vdlr-size">{filesize}</span>}
+        <span className={`vdlr-st ${status}`}>{label}</span>
+      </div>
+      <div className="vdlr-track"><div className={`vdlr-fill ${fillCls}`} style={status==='queued'?{width:'100%'}:{width:(status==='done'?100:pct)+'%'}}/></div>
+    </div>
+    <div className="vdlr-btns">
+      {status==='error'&&onRetry&&<button className="vdlr-btn" onClick={onRetry} title="Retry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg></button>}
+      {status==='done'&&onOpenFolder&&<button className="vdlr-btn" onClick={onOpenFolder} title="Open folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>}
+      {onRemove&&<button className="vdlr-btn danger" onClick={onRemove} title="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>}
+    </div>
+  </div>;
+}
+
+/* ── App ── */
+let _id=100;
+const INIT=[
+  {id:1,filename:'How to Build a PC in 2025 — Complete Guide.mp4',format:'video',status:'done',progress:100,filesize:'1.8 GB'},
+  {id:2,filename:'Interstellar — Official Soundtrack (Hans Zimmer).mp3',format:'audio',status:'downloading',progress:34,filesize:'312 MB',speed:'2.4 MB'},
+  {id:3,filename:'Lo-Fi Beats for Study — 3 Hour Compilation Vol.2.mp3',format:'audio',status:'queued',filesize:'~290 MB'},
+  {id:4,filename:'The Last of Us — S02E01 [1080p HEVC].mp4',format:'video',status:'error',filesize:'4.2 GB'},
+];
+const NAMES={video:['Tutorial Walkthrough','Documentary Clip','Vlog Episode','Movie Excerpt'],audio:['Podcast Episode','Music Track','Audiobook Chapter','Live Set Recording']};
+
+function TitleBar({tab,setTab}){
+  return <div className="titlebar">
+    <div className="tb-brand"><img src="../../assets/vela-mark.svg" width={22} height={22} alt=""/><span className="tb-name">Vela</span></div>
+    <div className="tb-tabs">{['Downloads','History','Settings'].map(t=><button key={t} className={`tb-tab${tab===t?' active':''}`} onClick={()=>setTab(t)}>{t}</button>)}</div>
+    <div className="tb-space"/>
+    <div className="tb-wc">
+      <button className="tc" title="Minimize"><svg width="10" height="1" viewBox="0 0 10 1"><line x1="0" y1=".5" x2="10" y2=".5" stroke="currentColor" strokeWidth="1.2"/></svg></button>
+      <button className="tc" title="Maximize"><svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg></button>
+      <button className="tc tc-x" title="Close"><svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" strokeWidth="1.4"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" strokeWidth="1.4"/></svg></button>
+    </div>
+  </div>;
+}
+
+function HistoryTab(){
+  return <div className="empty"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{opacity:.4}}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><p>Download history will appear here</p></div>;
+}
+
+function SettingsTab(){
+  const [folder,setFolder]=React.useState('C:\\Users\\User\\Downloads\\Vela');
+  const [autoStart,setAutoStart]=React.useState(true);
+  const [notify,setNotify]=React.useState(true);
+  const [conc,setConc]=React.useState('3');
+  return <div className="settings">
+    <div className="settings-section">
+      <span className="settings-lbl">Download location</span>
+      <VelaInput value={folder} onChange={setFolder} suffix={<button style={{padding:'0 12px',background:'var(--vela-surface-3)',border:'none',borderLeft:'1px solid var(--vela-border)',height:'100%',color:'var(--vela-text-2)',font:'var(--type-caption)',cursor:'pointer'}}>Browse</button>}/>
+    </div>
+    <div className="settings-section">
+      <span className="settings-lbl">Behaviour</span>
+      <Switch checked={autoStart} onChange={setAutoStart} label="Start downloading immediately after adding"/>
+      <Switch checked={notify} onChange={setNotify} label="Show notification when download completes"/>
+    </div>
+    <div className="settings-section">
+      <span className="settings-lbl">Max concurrent downloads</span>
+      <div style={{width:160}}><VelaSelect value={conc} onChange={setConc} options={[{value:'1',label:'1'},{value:'2',label:'2'},{value:'3',label:'3'},{value:'5',label:'5'}]}/></div>
+    </div>
+  </div>;
+}
+
+function VelaApp(){
+  const [url,setUrl]=React.useState('');
+  const [fmt,setFmt]=React.useState('video');
+  const [quality,setQuality]=React.useState('1080p');
+  const [plMode,setPlMode]=React.useState('split');
+  const [downloads,setDownloads]=React.useState(INIT);
+  const [tab,setTab]=React.useState('Downloads');
+  const isPl=/list=|playlist/i.test(url);
+  const hasUrl=url.trim().length>0;
+  const active=downloads.filter(d=>d.status==='downloading'||d.status==='queued').length;
+
+  React.useEffect(()=>{
+    const t=setInterval(()=>setDownloads(p=>p.map(d=>{
+      if(d.status==='downloading'&&d.progress<100){const np=d.progress+(0.3+Math.random()*0.4);return np>=100?{...d,progress:100,status:'done',speed:undefined}:{...d,progress:np};}
+      return d;
+    })),120);
+    return ()=>clearInterval(t);
+  },[]);
+
+  function add(){
+    if(!hasUrl)return;
+    const id=_id++;
+    const arr=NAMES[fmt];
+    const name=arr[Math.floor(Math.random()*arr.length)]+'.'+(fmt==='audio'?'mp3':'mp4');
+    const dl={id,filename:name,format:fmt,status:'queued',progress:0,filesize:'~'+Math.floor(Math.random()*700+150)+' MB'};
+    setDownloads(p=>[dl,...p]);
+    setUrl('');
+    setTimeout(()=>setDownloads(p=>p.map(d=>d.id===id?{...d,status:'downloading',speed:'1.8 MB'}:d)),1200);
+  }
+  function remove(id){setDownloads(p=>p.filter(d=>d.id!==id));}
+  function retry(id){setDownloads(p=>p.map(d=>d.id===id?{...d,status:'downloading',progress:0,speed:'2.1 MB'}:d));}
+
+  const qopts=fmt==='video'
+    ?[{value:'480p',label:'480p SD'},{value:'720p',label:'720p HD'},{value:'1080p',label:'1080p FHD'},{value:'2160p',label:'4K UHD'}]
+    :[{value:'128k',label:'128 kbps'},{value:'192k',label:'192 kbps'},{value:'256k',label:'256 kbps'},{value:'320k',label:'320 kbps (best)'}];
+
+  return <div className="app">
+    <TitleBar tab={tab} setTab={setTab}/>
+    <div className="content">
+      {tab==='Downloads'&&<>
+        <div className="input-card">
+          <UrlBar value={url} onChange={setUrl}/>
+          <div className="opts-row">
+            <FormatToggle value={fmt} onChange={v=>{setFmt(v);setQuality(v==='video'?'1080p':'256k');}}/>
+            <div style={{width:155}}><VelaSelect value={quality} onChange={setQuality} options={qopts}/></div>
+            <div style={{flex:1}}/>
+            <Button variant={hasUrl?'primary':'neutral'} disabled={!hasUrl} onClick={add}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Add to queue
+            </Button>
+          </div>
+          {isPl&&hasUrl&&<div className="pl-anim"><PlaylistMode mode={plMode} onChange={setPlMode}/></div>}
+        </div>
+        <div className="dl-section">
+          <div className="dl-header">
+            <span className="dl-htitle">Queue</span>
+            {active>0&&<Badge variant="primary">{active} active</Badge>}
+            <div style={{flex:1}}/>
+            {downloads.length>0&&<button className="dl-clear" onClick={()=>setDownloads([])}>Clear all</button>}
+          </div>
+          {downloads.length===0
+            ?<div className="empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{opacity:.4}}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><p>No downloads yet — paste a URL above to get started.</p></div>
+            :<div className="dl-list">{downloads.map(d=><DownloadRow key={d.id} {...d} onRemove={()=>remove(d.id)} onRetry={d.status==='error'?()=>retry(d.id):undefined} onOpenFolder={d.status==='done'?()=>{}:undefined}/>)}</div>}
+        </div>
+      </>}
+      {tab==='History'&&<HistoryTab/>}
+      {tab==='Settings'&&<SettingsTab/>}
+    </div>
+    <div className="sbar">
+      {active>0?<span className="sb-txt"><Spinner size="xs" color="primary"/>{active} download{active>1?'s':''} active</span>:<span className="sb-txt">Ready</span>}
+      <span className="sb-txt">· {downloads.filter(d=>d.status==='done').length} completed</span>
+    </div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<VelaApp/>);
+</script>
+</body>
+</html>
