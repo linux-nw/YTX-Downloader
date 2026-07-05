@@ -1,9 +1,14 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const fs = require("node:fs");
+const os = require("node:os");
 
 let mainWindow;
 let activeDownload = null;
+// Wird von download:cancel gesetzt, damit mehrstufige Abläufe (Transkript) nach
+// einem Abbruch nicht mit der nächsten Stufe weitermachen.
+let cancelRequested = false;
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -81,6 +86,10 @@ const ALLOWED_BROWSERS = new Set([
   "none", "chrome", "firefox", "edge", "brave", "opera", "vivaldi", "chromium", "safari", "whale"
 ]);
 
+// Whisper-Modelle (Sprache→Text). Größer = genauer aber langsamer. Default: base.
+const ALLOWED_WHISPER_MODELS = new Set(["tiny", "base", "small", "medium", "large"]);
+const normalizeWhisperModel = (m) => (ALLOWED_WHISPER_MODELS.has(m) ? m : "base");
+
 // Heuristik: Sieht die Fehlermeldung nach einem Zugriffs-/Anti-Bot-Block aus
 // (403/410/429/451, Cloudflare, "Unable to download webpage" …)? Dann lohnt ein
 // generischer Wiederholungsversuch mit Browser-Impersonation – seitenübergreifend.
@@ -97,7 +106,7 @@ const getAgeGateExtraArgs = (url) => {
 };
 
 // Vorbereitung für yt-dlp Download
-const buildYtDlpArgs = ({ url, format, quality, audioQuality, playlistMode, outputFolder, cookiesBrowser, impersonate }) => {
+const buildYtDlpArgs = ({ url, format, quality, audioQuality, playlistMode, outputFolder, cookiesBrowser, impersonate, embedCoverArt }) => {
   const args = [
     "--newline",
     "--no-colors",
@@ -126,6 +135,15 @@ const buildYtDlpArgs = ({ url, format, quality, audioQuality, playlistMode, outp
       "--audio-quality",
       audioQuality && audioQuality !== "undefined" ? audioQuality : "0"
     );
+    // Video-Thumbnail als Cover-Art in die MP3 (ID3 APIC) einbetten, wenn gewünscht.
+    if (embedCoverArt) {
+      args.push("--embed-thumbnail");
+    }
+  } else if (format === "audio-raw") {
+    // Nur für die interne Whisper-Vorbereitung: bestes Audio ohne ffmpeg-Reencode.
+    // Whisper sampelt intern ohnehin auf 16 kHz Mono herunter, ein MP3-Reencode
+    // mit Bestqualität davor kostet nur Zeit ohne jeden Nutzen.
+    args.push("--format", "bestaudio/best");
   } else {
     // Robuste Format-Auswahl mit mehreren Fallbacks (durch "/" getrennt), damit
     // möglichst viele Seiten klappen – auch solche ohne getrennte Video/Audio-
@@ -144,7 +162,14 @@ const buildYtDlpArgs = ({ url, format, quality, audioQuality, playlistMode, outp
       "--merge-output-format",
       "mp4"
     );
-    args.push("--embed-subs", "--embed-metadata");
+    // --embed-chapters bettet Kapitelmarken ein, wo die Seite sie liefert
+    // (z. B. YouTube-Kapitel, Twitch-VOD-Marker) – no-op sonst, kostet nichts.
+    args.push("--embed-subs", "--embed-metadata", "--embed-chapters");
+    // Video-Thumbnail als Cover-Art einbetten (attached-pic Stream im MP4),
+    // genau wie bei MP3 – dieselbe Einstellung gilt für beide Formate.
+    if (embedCoverArt) {
+      args.push("--embed-thumbnail");
+    }
   }
 
   if (playlistMode === "single-video") {
@@ -182,9 +207,9 @@ const getYtDlpCandidates = () => [
 ];
 
 // Prüft, ob ein Kommando vorhanden ist; gibt die Versionsausgabe (string) oder null zurück.
-const checkCommand = (command, args) => new Promise((resolve) => {
+const checkCommand = (command, args, env) => new Promise((resolve) => {
   try {
-    const child = spawn(command, args, { windowsHide: true });
+    const child = spawn(command, args, { windowsHide: true, env: env || process.env });
     let out = "";
     if (child.stdout) child.stdout.on("data", (d) => { out += d.toString(); });
     child.on("error", () => resolve(null));
@@ -303,6 +328,15 @@ const findStreamWithPlaywright = async (url, sendLog) => {
   }
 };
 
+// Zieldatei aus einer yt-dlp-Logzeile ermitteln (voller, von --paths aufgelöster
+// Pfad) – für den "Löschen"-Button im Verlauf, damit die richtige Datei entfernt wird.
+const parseDestinationFromLine = (line) => {
+  let match = line.match(/Merging formats into "(.+?)"/);
+  if (!match) match = line.match(/Destination:\s*(.+)$/);
+  if (!match) match = line.match(/\[download\]\s+(.+?) has already been downloaded/);
+  return match ? match[1].trim() : null;
+};
+
 const runDownloadWithCandidate = (candidate, options, runOpts = {}) => new Promise((resolve, reject) => {
   const args = [
     ...candidate.argsPrefix,
@@ -332,6 +366,8 @@ const runDownloadWithCandidate = (candidate, options, runOpts = {}) => new Promi
 
   // Letzte echte yt-dlp-Fehlerzeile merken, um sie statt "Code N" anzuzeigen.
   let lastErrorLine = "";
+  // Letzte erkannte Zieldatei merken – für den "Löschen"-Button im Verlauf.
+  let lastDestination = null;
 
   const handleOutput = (data) => {
     const lines = data.split(/\r?\n/).filter(Boolean);
@@ -343,6 +379,8 @@ const runDownloadWithCandidate = (candidate, options, runOpts = {}) => new Promi
         if (/^ERROR:|^\s*ERROR:|Unsupported URL|is not available|Unable to|HTTP Error/i.test(line)) {
           lastErrorLine = line.replace(/^ERROR:\s*/i, "").trim();
         }
+        const dest = parseDestinationFromLine(line);
+        if (dest) lastDestination = dest;
         sendToRenderer("download:log", line);
       }
     }
@@ -362,12 +400,413 @@ const runDownloadWithCandidate = (candidate, options, runOpts = {}) => new Promi
   child.on("close", (code) => {
     activeDownload = null;
     if (code === 0) {
-      resolve();
+      resolve(lastDestination);
       return;
     }
     reject(new Error(lastErrorLine || `yt-dlp wurde mit Code ${code} beendet.`));
   });
 });
+
+// Ermittelt die Thumbnail-URL des Videos über yt-dlp-Metadaten (%(thumbnail)s) –
+// für die Cover-Bild-Anzeige im Verlauf, wenn "Cover-Bild: Thumbnail" aktiv ist.
+const getThumbnailUrl = (candidate, url, cookiesBrowser, impersonate) => new Promise((resolve) => {
+  const args = [...candidate.argsPrefix, "--skip-download", "--no-playlist", "--print", "%(thumbnail)s"];
+  if (impersonate) args.push("--impersonate", "chrome");
+  if (cookiesBrowser && cookiesBrowser !== "none") args.push("--cookies-from-browser", cookiesBrowser);
+  args.push(url);
+  try {
+    const child = spawn(candidate.command, args, { windowsHide: true });
+    let out = "";
+    if (child.stdout) child.stdout.on("data", (d) => { out += d.toString(); });
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => {
+      if (code !== 0) return resolve(null);
+      const line = out.trim().split(/\r?\n/)[0].trim();
+      if (!line || /^na$/i.test(line) || line.toLowerCase() === "none") return resolve(null);
+      resolve(line);
+    });
+  } catch {
+    resolve(null);
+  }
+});
+
+// ============================================
+// Podcast: RSS-Feed einlesen, Episoden mit direktem Audio-Link zurückgeben.
+// Der eigentliche Download läuft danach über dieselbe MP3-Pipeline wie bei
+// YouTube & Co. – yt-dlps generischer Extractor lädt direkt verlinkte
+// Audiodateien (das "enclosure"-Attribut jeder Episode) genauso wie jede
+// andere URL, kein separater Downloader nötig.
+// ============================================
+
+// Regex-basiert statt mit einem XML-Parser, um keine zusätzliche Abhängigkeit
+// zu brauchen – Podcast-RSS ist strukturell einfach genug (ein <item> pro
+// Episode, ein <enclosure url="…">) dass das robust genug funktioniert.
+const decodeXmlEntities = (s) => String(s || "")
+  .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+  .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+  .replace(/&quot;/g, "\"").replace(/&#0?39;/g, "'")
+  .trim();
+
+const extractTag = (block, tag) => {
+  const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return m ? decodeXmlEntities(m[1]) : null;
+};
+
+// Begrenzung gegen versehentliches Queuen riesiger Feeds (manche haben 1000+ Folgen).
+// Höher als früher, damit die Folgenauswahl im UI auch bei Feeds mit langem
+// Archiv (mehrere hundert Episoden) die komplette Liste anzeigen kann.
+const MAX_PODCAST_EPISODES = 300;
+
+const resolvePodcastFeed = async (url) => {
+  let res;
+  try {
+    res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  } catch {
+    throw new Error("Podcast-Feed nicht erreichbar. Internetverbindung/URL prüfen.");
+  }
+  if (!res.ok) throw new Error(`Podcast-Feed konnte nicht geladen werden (${res.status}).`);
+  const xml = await res.text();
+
+  const itemBlocks = xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
+  if (itemBlocks.length === 0) {
+    throw new Error("Kein gültiger Podcast-RSS-Feed (keine Episoden gefunden).");
+  }
+
+  const episodes = [];
+  for (const block of itemBlocks) {
+    if (episodes.length >= MAX_PODCAST_EPISODES) break;
+    const title = extractTag(block, "title");
+    const enclosureMatch = block.match(/<enclosure[^>]*\surl=["']([^"']+)["'][^>]*>/i);
+    const audioUrl = enclosureMatch ? decodeXmlEntities(enclosureMatch[1]) : null;
+    if (!title || !audioUrl) continue;
+    episodes.push({ title, audioUrl, pubDate: extractTag(block, "pubDate") });
+  }
+  if (episodes.length === 0) {
+    throw new Error("Keine Episoden mit direktem Audio-Link gefunden.");
+  }
+  return episodes;
+};
+
+// Sendet "download:completed" – holt bei MP3/MP4 + aktiviertem Cover-Bild-
+// Setting zusätzlich die Thumbnail-URL für die Anzeige im Verlauf (best effort).
+const sendDownloadCompleted = async (normalized, filePath, candidate, deps) => {
+  let thumbnailUrl = null;
+  if ((normalized.format === "mp3" || normalized.format === "mp4") && normalized.embedCoverArt && candidate) {
+    thumbnailUrl = await getThumbnailUrl(candidate, normalized.url, normalized.cookiesBrowser, deps && deps.impersonateAvailable);
+  }
+  sendToRenderer("download:completed", { outputFolder: normalized.outputFolder, filePath, thumbnailUrl });
+};
+
+// ============================================
+// Transkript: Untertitel-Extraktion + Whisper-Fallback
+// ============================================
+
+// openai-whisper liefert KEIN `python -m whisper` (kein __main__), aber das
+// Console-Script `whisper` und den CLI-Entrypoint `whisper.transcribe:cli`.
+// Primär das Script (liegt nach pip-Install im PATH), als Fallback der direkte
+// CLI-Aufruf über den jeweiligen Python (falls das Scripts-Verzeichnis fehlt).
+const WHISPER_CLI_SNIPPET = "from whisper.transcribe import cli; cli()";
+const getWhisperCandidates = () => [
+  { command: "whisper", argsPrefix: [] },
+  { command: "python", argsPrefix: ["-c", WHISPER_CLI_SNIPPET] },
+  { command: "py", argsPrefix: ["-c", WHISPER_CLI_SNIPPET] },
+  { command: "python3", argsPrefix: ["-c", WHISPER_CLI_SNIPPET] }
+];
+
+// UTF-8 erzwingen: ohne PYTHONUTF8=1 stürzt schon `whisper --help` auf der
+// Windows-Konsole (cp1252) ab, weil der Hilfetext Nicht-Latin-Zeichen enthält.
+const WHISPER_ENV = { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
+
+// Erste verfügbare Whisper-Variante finden – bewusst lazy (erst wenn gebraucht),
+// weil `whisper --help` torch importiert und das mehrere Sekunden dauern kann.
+const findWhisper = async () => {
+  for (const c of getWhisperCandidates()) {
+    const ok = await checkCommand(c.command, [...c.argsPrefix, "--help"], WHISPER_ENV);
+    if (ok) return c;
+  }
+  return null;
+};
+
+// Standard-Sprachprioritäten, wenn der Nutzer "auto" wählt.
+const SUB_LANG_PRIORITY = ["en", "de", "es", "fr", "it", "pt", "nl", "ja", "ko", "ru"];
+const resolveSubLangs = (lang) => {
+  if (!lang || lang === "auto") return SUB_LANG_PRIORITY.map((c) => `${c}.*`).join(",");
+  if (lang === "all") return "all,-live_chat";
+  return `${lang}.*`;
+};
+// Whisper bekommt nur eine konkrete Sprache; bei auto/all selbst erkennen lassen.
+const resolveWhisperLang = (lang) => (!lang || lang === "auto" || lang === "all") ? null : lang;
+
+// Ermittelt die tatsächliche Videosprache über yt-dlp-Metadaten (%(language)s).
+// Wichtig für "auto": YouTube bietet für praktisch jedes Video automatische
+// Untertitel in ~150 Sprachen an – das sind aber fast immer Maschinen-
+// übersetzungen der einen echten Original-Tonspur, keine eigenständigen
+// Transkripte. Ohne diese Erkennung würde die alte Prioritätsliste (en, de, …)
+// fast immer die englische Übersetzung statt der Originalsprache liefern.
+const detectVideoLanguage = (candidate, url, cookiesBrowser, impersonate) => new Promise((resolve) => {
+  const args = [...candidate.argsPrefix, "--skip-download", "--no-playlist", "--print", "%(language)s"];
+  if (impersonate) args.push("--impersonate", "chrome");
+  if (cookiesBrowser && cookiesBrowser !== "none") args.push("--cookies-from-browser", cookiesBrowser);
+  args.push(url);
+  try {
+    const child = spawn(candidate.command, args, { windowsHide: true });
+    let out = "";
+    if (child.stdout) child.stdout.on("data", (d) => { out += d.toString(); });
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => {
+      if (code !== 0) return resolve(null);
+      const line = out.trim().split(/\r?\n/)[0].trim();
+      if (!line || /^na$/i.test(line) || line.toLowerCase() === "none") return resolve(null);
+      resolve(line.split(/[-_]/)[0].toLowerCase());
+    });
+  } catch {
+    resolve(null);
+  }
+});
+
+const buildSubtitleArgs = ({ url, subLangs, outputFolder, cookiesBrowser, impersonate }) => {
+  const args = [
+    "--newline",
+    "--no-colors",
+    "--ignore-config",
+    "--no-playlist",
+    "--skip-download",
+    "--write-subs",
+    "--write-auto-subs",
+    "--sub-langs",
+    subLangs,
+    "--sub-format",
+    "vtt/srt/best",
+    "--paths",
+    outputFolder,
+    "--output",
+    "%(title).180B.%(ext)s"
+  ];
+  if (impersonate) args.push("--impersonate", "chrome");
+  if (cookiesBrowser && cookiesBrowser !== "none") args.push("--cookies-from-browser", cookiesBrowser);
+  args.push(url);
+  return args;
+};
+
+// VTT/SRT → reiner Text: WEBVTT-Header, Zeitstempel, Cue-Nummern, Inline-Tags und
+// direkte Wiederholungen (typisch bei rollenden Auto-Captions) entfernen.
+const subtitleToText = (raw) => {
+  const out = [];
+  let last = "";
+  for (let line of raw.split(/\r?\n/)) {
+    line = line.trim();
+    if (!line) continue;
+    if (/^WEBVTT/.test(line)) continue;
+    if (/^(NOTE|Kind:|Language:|STYLE|REGION)/.test(line)) continue;
+    if (line.includes("-->")) continue;       // Zeitstempelzeile
+    if (/^\d+$/.test(line)) continue;          // SRT Cue-Nummer
+    line = line
+      .replace(/<[^>]+>/g, "")                  // <00:00:00.000>, <c>…</c>
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .trim();
+    if (!line || line === last) continue;
+    out.push(line);
+    last = line;
+  }
+  return out.join("\n");
+};
+
+// Aus den von yt-dlp geschriebenen Untertiteldateien die passende nach
+// Sprachpriorität wählen (existierende Dateien bevorzugt).
+const pickSubtitleFile = (files, lang) => {
+  if (!files || files.length === 0) return null;
+  const existing = files.filter((f) => { try { return fs.existsSync(f); } catch { return false; } });
+  const list = existing.length ? existing : files;
+  const langHit = (code) => list.find((f) => new RegExp(`\\.${code}(?:[-.]|$)`, "i").test(path.basename(f)));
+  if (lang && lang !== "auto" && lang !== "all") {
+    const pref = langHit(lang);
+    if (pref) return pref;
+  } else if (lang === "auto") {
+    for (const code of SUB_LANG_PRIORITY) {
+      const hit = langHit(code);
+      if (hit) return hit;
+    }
+  }
+  return list[0];
+};
+
+// Einzige Audiodatei im temporären Ordner finden (Ergebnis des Audio-Downloads).
+const findAudioFile = (dir) => {
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch { return null; }
+  const audio = entries.filter((f) => /\.(mp3|m4a|opus|webm|aac|wav|ogg|flac)$/i.test(f));
+  return audio.length ? path.join(dir, audio[0]) : null;
+};
+
+// Generisches Streaming-Spawn: setzt activeDownload (für Abbruch), leitet jede
+// Zeile an onLine und merkt sich die letzte echte Fehlerzeile.
+const spawnStreaming = (command, args, { env, onLine } = {}) => new Promise((resolve, reject) => {
+  const child = spawn(command, args, { windowsHide: true, env: env || process.env });
+  activeDownload = child;
+  let lastErr = "";
+  if (child.stdout) child.stdout.setEncoding("utf8");
+  if (child.stderr) child.stderr.setEncoding("utf8");
+  const handle = (data) => {
+    for (const line of data.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      if (/^ERROR:|Unsupported URL|is not available|Unable to|HTTP Error/i.test(line)) {
+        lastErr = line.replace(/^ERROR:\s*/i, "").trim();
+      }
+      if (onLine) onLine(line);
+    }
+  };
+  if (child.stdout) child.stdout.on("data", handle);
+  if (child.stderr) child.stderr.on("data", handle);
+  child.on("error", (err) => {
+    if (err.code === "ENOENT") {
+      reject(Object.assign(new Error(`${command} wurde nicht gefunden.`), { code: "ENOENT" }));
+      return;
+    }
+    reject(err);
+  });
+  child.on("close", (code) => {
+    activeDownload = null;
+    resolve({ code, lastErr });
+  });
+});
+
+// Komplette Transkript-Pipeline. Sendet dieselben Events wie ein Download
+// (download:log / download:completed / download:failed) und liefert {ok,error}.
+const runTranscript = async (normalized, deps) => {
+  const log = (m) => sendToRenderer("download:log", m);
+  const fail = (msg) => { sendToRenderer("download:failed", msg); return { ok: false, error: msg }; };
+  const env = { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
+
+  // --- Stufe 1: vorhandene Untertitel / Auto-Captions holen ---
+  log("[Transkript 1/2] Suche vorhandene Untertitel …");
+  let ytCandidate = null;
+  let subFiles = [];
+  let detectedLang = null;
+  for (const c of getYtDlpCandidates()) {
+    subFiles = [];
+    let subLangs = resolveSubLangs(normalized.lang);
+    if (normalized.lang === "auto") {
+      detectedLang = await detectVideoLanguage(c, normalized.url, normalized.cookiesBrowser, deps.impersonateAvailable);
+      if (detectedLang) {
+        log(`Erkannte Videosprache: ${detectedLang}`);
+        subLangs = `${detectedLang}.*`;
+      }
+    }
+    const args = [...c.argsPrefix, ...buildSubtitleArgs({
+      url: normalized.url,
+      subLangs,
+      outputFolder: normalized.outputFolder,
+      cookiesBrowser: normalized.cookiesBrowser,
+      impersonate: deps.impersonateAvailable
+    })];
+    try {
+      await spawnStreaming(c.command, args, {
+        env,
+        onLine: (line) => {
+          const m = line.match(/Writing video subtitles to:\s*(.+)$/i) || line.match(/Writing subtitles to:\s*(.+)$/i);
+          if (m) subFiles.push(m[1].trim());
+          log(line);
+        }
+      });
+      ytCandidate = c;
+      break;
+    } catch (err) {
+      if (err.code === "ENOENT") continue; // nächste yt-dlp-Variante probieren
+      ytCandidate = c;
+      break;
+    }
+  }
+
+  if (!ytCandidate) {
+    return fail("yt-dlp wurde nicht gefunden. Bitte installiere yt-dlp (z. B. \"pip install yt-dlp\") und stelle sicher, dass es im PATH liegt.");
+  }
+  if (cancelRequested) return { ok: false };
+
+  // Transkripte haben keine eigene Cover-Art zum Einbetten (reiner Text) – bei
+  // aktiviertem Cover-Bild-Setting holen wir das Thumbnail trotzdem best effort
+  // für die Vorschau im Verlauf (dieselbe Optik wie bei Video/Audio).
+  const thumbnailUrl = normalized.embedCoverArt
+    ? await getThumbnailUrl(ytCandidate, normalized.url, normalized.cookiesBrowser, deps.impersonateAvailable)
+    : null;
+
+  const chosen = pickSubtitleFile(subFiles, detectedLang || normalized.lang);
+  if (chosen) {
+    try {
+      const text = subtitleToText(fs.readFileSync(chosen, "utf8"));
+      if (text.trim()) {
+        const txtPath = chosen.replace(/\.[^.]+$/, "") + ".txt";
+        fs.writeFileSync(txtPath, text, "utf8");
+        log("Untertitel gefunden – Transkript gespeichert.");
+        log(`Destination: ${txtPath}`);
+        sendToRenderer("download:completed", { outputFolder: normalized.outputFolder, transcriptText: text, transcriptPath: txtPath, thumbnailUrl });
+        return { ok: true };
+      }
+    } catch (err) {
+      log(`Untertitel-Datei konnte nicht gelesen werden: ${err.message}`);
+    }
+  }
+
+  // --- Stufe 2: keine (passenden) Untertitel → Whisper-Transkription ---
+  log("[Transkript 2/2] Keine passenden Untertitel – automatischer Whisper-Fallback …");
+  const whisper = await findWhisper();
+  if (!whisper) {
+    return fail(
+      "Keine Untertitel verfügbar und Whisper ist nicht installiert. Für die automatische " +
+      "Transkription beliebiger Videos bitte Whisper installieren: pip install -U openai-whisper " +
+      "(benötigt zusätzlich ffmpeg im PATH)."
+    );
+  }
+  if (cancelRequested) return { ok: false };
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ytx-trans-"));
+  try {
+    // Audio über die bestehende Download-Pipeline laden (liefert echten Fortschritt).
+    log("Lade Audiospur für die Transkription …");
+    await runDownloadWithCandidate(ytCandidate, {
+      ...normalized,
+      format: "audio-raw",
+      outputFolder: tmpDir,
+      playlistMode: "single-video"
+    }, { impersonate: deps.impersonateAvailable });
+
+    if (cancelRequested) return { ok: false };
+
+    const audioFile = findAudioFile(tmpDir);
+    if (!audioFile) throw new Error("Audiodatei nach dem Download nicht gefunden.");
+
+    const wlang = resolveWhisperLang(normalized.lang);
+    const wargs = [
+      ...whisper.argsPrefix,
+      audioFile,
+      "--model", normalized.whisperModel,
+      "--output_format", "txt",
+      "--output_dir", normalized.outputFolder,
+      ...(wlang ? ["--language", wlang] : [])
+    ];
+    log(`[Whisper] Transkribiere Audio (Modell: ${normalized.whisperModel}) – das kann je nach Länge dauern …`);
+    const { code } = await spawnStreaming(whisper.command, wargs, { env, onLine: (line) => log(line) });
+    if (cancelRequested) return { ok: false };
+    if (code !== 0) throw new Error(`Whisper wurde mit Code ${code} beendet.`);
+
+    const base = path.basename(audioFile).replace(/\.[^.]+$/, "");
+    const outTxtPath = path.join(normalized.outputFolder, base + ".txt");
+    log(`Destination: ${outTxtPath}`);
+    let whisperText;
+    try { whisperText = fs.readFileSync(outTxtPath, "utf8"); } catch { /* Anzeige best effort, Datei bleibt trotzdem gespeichert */ }
+    sendToRenderer("download:completed", { outputFolder: normalized.outputFolder, transcriptText: whisperText, transcriptPath: outTxtPath, thumbnailUrl });
+    return { ok: true };
+  } catch (err) {
+    if (cancelRequested) return { ok: false };
+    let msg = err && err.message ? err.message : "Transkription fehlgeschlagen.";
+    if (err && err.code === "ENOENT") msg = "Whisper oder yt-dlp wurde nicht gefunden.";
+    return fail(msg);
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* Aufräumen best effort */ }
+  }
+};
 
 // ============================================
 // IPC Handlers - Vela App kompatibel
@@ -408,17 +847,21 @@ ipcMain.handle("download:start", async (_event, options) => {
   if (activeDownload) {
     return { ok: false, error: "Es läuft bereits ein Download." };
   }
+  cancelRequested = false;
 
   const normalized = {
     url: String(options.url || "").trim(),
-    format: options.format === "mp3" ? "mp3" : "mp4",
+    format: options.format === "mp3" ? "mp3" : options.format === "transcript" ? "transcript" : "mp4",
     quality: options.quality ? String(options.quality) : undefined,
     audioQuality: options.audioQuality ? String(options.audioQuality) : undefined,
+    embedCoverArt: !!options.embedCoverArt,
     playlistMode: options.playlistMode || "single-video",
     outputFolder: options.outputFolder || getDefaultDownloadFolder(),
     encoding: normalizeEncoding(options.encoding),
     cookiesBrowser: ALLOWED_BROWSERS.has(options.cookiesBrowser) ? options.cookiesBrowser : "none",
-    playwrightFallback: !!options.playwrightFallback
+    playwrightFallback: !!options.playwrightFallback,
+    lang: options.lang ? String(options.lang) : "auto",
+    whisperModel: normalizeWhisperModel(options.whisperModel)
   };
 
   if (!normalized.url) {
@@ -426,6 +869,12 @@ ipcMain.handle("download:start", async (_event, options) => {
   }
 
   sendToRenderer("download:started", normalized);
+
+  // Transkript läuft über eine eigene Pipeline (Untertitel + Whisper-Fallback).
+  if (normalized.format === "transcript") {
+    const depsT = await getDependencyStatus();
+    return await runTranscript(normalized, depsT);
+  }
 
   const deps = await getDependencyStatus();
   let lastError;
@@ -435,8 +884,8 @@ ipcMain.handle("download:start", async (_event, options) => {
   for (const candidate of getYtDlpCandidates()) {
     try {
       sendToRenderer("download:log", `[Stufe 1/5] Starte mit ${candidate.command}${candidate.argsPrefix.length ? ` ${candidate.argsPrefix.join(" ")}` : ""}${deps.impersonateAvailable ? " (Impersonation: chrome)" : ""}`);
-      await runDownloadWithCandidate(candidate, normalized, { impersonate: deps.impersonateAvailable });
-      sendToRenderer("download:completed", { outputFolder: normalized.outputFolder });
+      const filePath = await runDownloadWithCandidate(candidate, normalized, { impersonate: deps.impersonateAvailable });
+      await sendDownloadCompleted(normalized, filePath, candidate, deps);
       return { ok: true };
     } catch (error) {
       lastError = error;
@@ -455,11 +904,11 @@ ipcMain.handle("download:start", async (_event, options) => {
     if (ageGateArgs) {
       try {
         sendToRenderer("download:log", "[Stufe 2/5] Erneuter Versuch mit Age-Gate-Bypass …");
-        await runDownloadWithCandidate(workingCandidate, normalized, {
+        const filePath = await runDownloadWithCandidate(workingCandidate, normalized, {
           impersonate: true,
           extraArgs: ageGateArgs
         });
-        sendToRenderer("download:completed", { outputFolder: normalized.outputFolder });
+        await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
         return { ok: true };
       } catch (error) {
         lastError = error;
@@ -469,8 +918,8 @@ ipcMain.handle("download:start", async (_event, options) => {
     // Stufe 3: Fallback ohne Impersonation (für Seiten, die curl_cffi-TLS ablehnen).
     try {
       sendToRenderer("download:log", "[Stufe 3/5] Fallback: Versuch ohne Browser-Impersonation …");
-      await runDownloadWithCandidate(workingCandidate, normalized, { impersonate: false });
-      sendToRenderer("download:completed", { outputFolder: normalized.outputFolder });
+      const filePath = await runDownloadWithCandidate(workingCandidate, normalized, { impersonate: false });
+      await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
       return { ok: true };
     } catch (error) {
       lastError = error;
@@ -481,11 +930,11 @@ ipcMain.handle("download:start", async (_event, options) => {
   if (workingCandidate && isUnsupportedUrl(lastError && lastError.message)) {
     try {
       sendToRenderer("download:log", "[Stufe 4/5] Kein Extractor – Versuch mit Generic-Extractor …");
-      await runDownloadWithCandidate(workingCandidate, normalized, {
+      const filePath = await runDownloadWithCandidate(workingCandidate, normalized, {
         impersonate: deps.impersonateAvailable,
         extraArgs: ["--force-generic-extractor"]
       });
-      sendToRenderer("download:completed", { outputFolder: normalized.outputFolder });
+      await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
       return { ok: true };
     } catch (error) {
       lastError = error;
@@ -503,10 +952,10 @@ ipcMain.handle("download:start", async (_event, options) => {
       );
       if (streamUrl) {
         sendToRenderer("download:log", `Playwright: Stream-URL gefunden – übergebe an yt-dlp …`);
-        await runDownloadWithCandidate(workingCandidate, { ...normalized, url: streamUrl }, {
+        const filePath = await runDownloadWithCandidate(workingCandidate, { ...normalized, url: streamUrl }, {
           impersonate: deps.impersonateAvailable
         });
-        sendToRenderer("download:completed", { outputFolder: normalized.outputFolder });
+        await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
         return { ok: true };
       }
       lastError = Object.assign(new Error("Kein Stream gefunden"), { code: "PLAYWRIGHT_NO_STREAM" });
@@ -542,8 +991,21 @@ ipcMain.handle("download:start", async (_event, options) => {
   return { ok: false, error: message };
 });
 
+// Podcast: RSS-Feed-Link → Liste von Episoden {title, audioUrl, pubDate}.
+// Lädt selbst nichts herunter, nur den Feed – der Download läuft danach ganz
+// normal über download:start (jede Episode ist eine eigene MP3-URL).
+ipcMain.handle("podcast:resolve", async (_event, url) => {
+  try {
+    const episodes = await resolvePodcastFeed(url);
+    return { ok: true, episodes };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : "Podcast-Feed konnte nicht gelesen werden." };
+  }
+});
+
 // Download cancel
 ipcMain.handle("download:cancel", () => {
+  cancelRequested = true;
   if (!activeDownload) {
     return { ok: true };
   }
@@ -559,6 +1021,31 @@ ipcMain.handle("folder:open", async (_event, folderPath) => {
   const target = folderPath || getDefaultDownloadFolder();
   await shell.openPath(target);
   return { ok: true };
+});
+
+// Datei mit der Standard-App des Systems öffnen (z. B. MP3 im Player,
+// Transkript-TXT im Texteditor) – für Notification-Klick und Auto-Open.
+ipcMain.handle("file:open", async (_event, filePath) => {
+  if (!filePath || typeof filePath !== "string") {
+    return { ok: false, error: "Kein Dateipfad angegeben." };
+  }
+  const error = await shell.openPath(filePath);
+  return error ? { ok: false, error } : { ok: true };
+});
+
+// Datei löschen (Verlauf-Eintrag entfernen soll auch die echte Datei löschen).
+// fs.unlink wirkt nur auf Dateien, nie auf Verzeichnisse.
+ipcMain.handle("file:delete", async (_event, filePath) => {
+  if (!filePath || typeof filePath !== "string") {
+    return { ok: false, error: "Kein Dateipfad angegeben." };
+  }
+  try {
+    await fs.promises.unlink(filePath);
+    return { ok: true };
+  } catch (err) {
+    if (err.code === "ENOENT") return { ok: true }; // bereits gelöscht
+    return { ok: false, error: err.message };
+  }
 });
 
 // Window controls (für Vela App Titelleiste)

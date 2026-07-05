@@ -184,6 +184,26 @@
   animation: slide-in 200ms ease-out;
 }
 
+/* Plattform-Badge: rein informativ, zeigt an, welche Seite erkannt wurde. */
+.platform-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: var(--type-xs);
+  color: var(--vela-text-3);
+  animation: slide-in 150ms ease-out;
+}
+.platform-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vela-primary);
+  flex-shrink: 0;
+}
+.platform-badge-note {
+  color: var(--vela-success);
+}
+
 @keyframes slide-in {
   from {
     opacity: 0;
@@ -195,14 +215,63 @@
   }
 }
 
-/* Download Section — sitzt direkt unter der Eingabe-Karte (normaler Abstand
-   über das gap der .content-Spalte). */
-.dl-section {
+/* Warteschlange + Verlauf nebeneinander als zwei gleich hohe Spalten, jede
+   mit eigenem, unabhängigem Scrollbereich — Eingabe-Karte bleibt oben fix. */
+.dl-sections {
   flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+/* Schlanke, dezente Scrollbar für alle scrollenden Bereiche (Warteschlange-
+   /Verlauf-Listen, Einstellungen, Transkript-Textfeld) statt der klobigen
+   Standard-Scrollbar. Deutlicher Track-Rand oben/unten, damit der Balken
+   sichtbar abgesetzt ist statt bis an die Kante zu laufen. */
+.dl-list,
+.settings-overlay-content .settings,
+.vtxt-area {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vela-border) transparent;
+}
+
+.dl-list::-webkit-scrollbar,
+.settings-overlay-content .settings::-webkit-scrollbar,
+.vtxt-area::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dl-list::-webkit-scrollbar-track,
+.settings-overlay-content .settings::-webkit-scrollbar-track,
+.vtxt-area::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 28px 0;
+}
+
+.dl-list::-webkit-scrollbar-thumb,
+.settings-overlay-content .settings::-webkit-scrollbar-thumb,
+.vtxt-area::-webkit-scrollbar-thumb {
+  background: var(--vela-border);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.dl-list::-webkit-scrollbar-thumb:hover,
+.settings-overlay-content .settings::-webkit-scrollbar-thumb:hover,
+.vtxt-area::-webkit-scrollbar-thumb:hover {
+  background: var(--vela-text-3);
+  background-clip: padding-box;
+}
+
+/* Download Section — Warteschlange oder Verlauf, eine Spalte im .dl-sections
+   Grid; die Liste darin scrollt unabhängig von der jeweils anderen Spalte. */
+.dl-section {
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .dl-header {
@@ -237,31 +306,26 @@
 }
 
 .dl-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow-y: auto;
   padding-right: 4px;
-}
-
-.dl-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.dl-list::-webkit-scrollbar-thumb {
-  background: var(--vela-border);
-  border-radius: 999px;
 }
 
 .empty {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
   color: var(--vela-text-3);
-  padding: 8vh 40px 40px;
+  padding: 4vh 20px 40px;
 }
 
 .empty p {
@@ -298,14 +362,75 @@
   padding: 4px 2px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  max-width: 520px;
+  gap: 24px;
 }
 
-.settings-section {
+.settings-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+
+.settings-group-title {
+  font: var(--type-caption);
+  color: var(--vela-text-3);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.settings-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--vela-text-2);
+  font: var(--type-caption);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  transition: color 100ms;
+}
+.settings-advanced-toggle:hover {
+  color: var(--vela-text);
+}
+.settings-advanced-toggle svg {
+  width: 12px;
+  height: 12px;
+  transition: transform 150ms;
+}
+.settings-advanced-toggle.open svg {
+  transform: rotate(90deg);
+}
+
+/* Zwei unabhängige Spalten statt Grid-Zeilen: jede Karte stapelt sich direkt
+   unter der vorherigen in ihrer eigenen Spalte, ohne dass unterschiedlich
+   hohe Karten (z. B. mit/ohne Hinweistext) in der jeweils anderen Spalte
+   Leerraum durch erzwungen gleiche Zeilenhöhe erzeugen. */
+.settings-cols {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.settings-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--vela-surface-2);
+  border: 1px solid var(--vela-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  min-width: 0;
 }
 
 .settings-lbl {
@@ -313,6 +438,12 @@
   color: var(--vela-text-3);
   text-transform: uppercase;
   letter-spacing: var(--tracking-caps);
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: var(--vela-text-3);
+  word-break: break-word;
 }
 
 /* ============================================================
@@ -327,10 +458,10 @@
 .vinp { flex: 1; background: transparent; border: none; outline: none; color: var(--vela-text); font: var(--type-body); padding: 0 12px; }
 
 /* Vela UrlBar */
-.vurl { display: flex; align-items: center; background: var(--vela-surface-2); border: 1px solid var(--vela-border); border-radius: var(--radius-lg); overflow: hidden; transition: border-color 150ms, box-shadow 150ms; height: 48px; }
+.vurl { display: flex; align-items: center; background: var(--vela-surface-2); border: 1px solid var(--vela-border); border-radius: var(--radius-lg); overflow: hidden; transition: border-color 150ms, box-shadow 150ms; height: 48px; cursor: text; }
 .vurl:focus-within { border-color: var(--vela-primary-line); box-shadow: var(--ring-focus); }
 .vurl.filled { border-color: var(--vela-border-strong); }
-.vurl-inp { flex: 1; background: transparent; border: none; outline: none; color: var(--vela-text); font-family: var(--font-mono); font-size: 13px; padding: 0 14px; min-width: 0; }
+.vurl-inp { flex: 1; height: 100%; background: transparent; border: none; outline: none; color: var(--vela-text); font-family: var(--font-mono); font-size: 13px; padding: 0 14px; min-width: 0; cursor: text; }
 .vurl-inp::placeholder { font-family: var(--font-sans); font-size: 14px; color: var(--vela-text-3); }
 .vurl-clr { width: 34px; height: 100%; background: transparent; border: none; color: var(--vela-text-3); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: color 100ms; }
 .vurl-clr:hover { color: var(--vela-danger); }
@@ -338,12 +469,34 @@
 .vurl-paste:hover { background: var(--vela-primary-soft); color: var(--vela-primary); }
 .vurl-paste svg, .vurl-clr svg { width: 15px; height: 15px; }
 
-/* Vela FormatToggle */
-.vft { display: inline-flex; background: var(--vela-surface-3); border-radius: var(--radius-md); padding: 3px; gap: 2px; border: 1px solid var(--vela-border-subtle); }
-.vft-btn { display: flex; align-items: center; gap: 7px; border: none; background: transparent; cursor: pointer; border-radius: calc(var(--radius-md) - 2px); padding: 0 16px; height: 32px; font: var(--type-sm); font-weight: 500; color: var(--vela-text-3); }
-.vft-btn.on { background: var(--vela-primary); color: var(--vela-on-primary); }
+/* Vela FormatToggle — inhaltsbreite Segmente (Labels sind unterschiedlich lang)
+   mit einer einzigen gleitenden Markierung (immer teal). Position/Breite der
+   Markierung werden per JS aus den echten Button-Rects gesetzt (siehe FormatToggle). */
+.vft { position: relative; display: inline-flex; background: var(--vela-surface-3); border-radius: var(--radius-md); padding: 3px; gap: 2px; border: 1px solid var(--vela-border-subtle); }
+.vft-indicator {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  height: 32px;
+  background: var(--vela-primary);
+  border-radius: calc(var(--radius-md) - 2px);
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1), width 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 0;
+  pointer-events: none;
+}
+.vft-btn { position: relative; z-index: 1; display: flex; align-items: center; gap: 7px; border: none; background: transparent; cursor: pointer; border-radius: calc(var(--radius-md) - 2px); padding: 0 16px; height: 32px; font: var(--type-sm); font-weight: 500; color: var(--vela-text-3); transition: color 200ms ease; }
+.vft-btn.on { color: var(--vela-on-primary); }
+/* Überschreibt den grauen Hover aus dem Design-System-Bundle (gleicher Klassenname
+   .vft-btn dort, Bundle-Regel kennt aber nur seine eigene .vft-active-Klasse und
+   greift daher auch bei UNSEREM aktiven ".on"-Button – der graue Overlay lag dann
+   über der teal Markierung). Beide Zustände hier explizit neutralisiert. */
+.vft .vft-btn:hover:not(.on) { background: transparent; color: var(--vela-text-3); }
+.vft .vft-btn.on:hover { background: transparent; color: var(--vela-on-primary); }
 .vft-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
 .vft-tag { font-size: 9px; font-weight: 700; letter-spacing: .07em; background: oklch(0 0 0/.22); padding: 1px 4px; border-radius: 3px; }
+/* Format passt nicht zur eingefügten URL (z. B. Podcast bei einem YouTube-Link) */
+.vft-btn.vft-disabled { opacity: .35; cursor: not-allowed; }
+.vft .vft-btn.vft-disabled:hover { background: transparent; color: var(--vela-text-3); }
 
 /* Vela PlaylistMode */
 .vpm { display: flex; flex-direction: column; gap: 6px; }
@@ -365,9 +518,14 @@
 /* Vela DownloadRow */
 .vdlr { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--vela-surface-2); border-radius: var(--radius-md); border: 1px solid var(--vela-border-subtle); transition: background 150ms; }
 .vdlr:hover { background: oklch(0.25 .018 257); }
-.vdlr-ico { width: 36px; height: 36px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.vdlr-clickzone { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+.vdlr-clickzone.vdlr-toggleable { cursor: pointer; }
+.vdlr-clickzone.vdlr-toggleable:hover .vdlr-name { color: var(--vela-primary-hover); }
+.vdlr-ico { width: 36px; height: 36px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; }
+.vdlr-thumb { width: 100%; height: 100%; object-fit: cover; }
 .vdlr-ico.vdli-video { background: var(--vela-primary-soft); color: var(--vela-video); }
 .vdlr-ico.vdli-audio { background: var(--vela-secondary-soft); color: var(--vela-audio); }
+.vdlr-ico.vdli-transcript { background: var(--vela-tertiary-soft, oklch(0.72 0.16 300 / 0.16)); color: var(--vela-tertiary, oklch(0.78 0.15 300)); }
 .vdlr-ico svg { width: 17px; height: 17px; }
 .vdlr-body { flex: 1; min-width: 0; }
 .vdlr-name { font: var(--type-sm); color: var(--vela-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
@@ -383,6 +541,7 @@
 .vdlr-fill { height: 100%; border-radius: var(--radius-full); transition: width 400ms ease-out; position: relative; }
 .vdlr-fill.fv { background: var(--vela-primary); }
 .vdlr-fill.fa { background: var(--vela-secondary); }
+.vdlr-fill.ft { background: var(--vela-tertiary, oklch(0.78 0.15 300)); }
 .vdlr-fill.fd { background: var(--vela-success); }
 .vdlr-fill.fe { background: var(--vela-danger); }
 .vdlr-fill.fq { background: var(--vela-surface-3); overflow: hidden; }
@@ -393,6 +552,15 @@
 .vdlr-btn:hover { background: var(--vela-surface-3); color: var(--vela-text); }
 .vdlr-btn.vdlb-danger:hover { background: var(--vela-danger-soft); color: var(--vela-danger); }
 .vdlr-btn svg { width: 14px; height: 14px; }
+
+/* Verlauf: Zeile + ausklappbares Transkript-Textfeld */
+.vhist-item { display: flex; flex-direction: column; gap: 6px; }
+.vhist-time { font: var(--type-xs); color: var(--vela-text-3); }
+.vhist-tag { font-size: 9px; font-weight: 700; letter-spacing: .07em; }
+.vtxt-panel { background: var(--vela-surface-2); border: 1px solid var(--vela-border-subtle); border-radius: var(--radius-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.vtxt-area { width: 100%; min-height: 140px; max-height: 300px; resize: vertical; background: var(--vela-surface-3, transparent); color: var(--vela-text); border: 1px solid var(--vela-border-subtle); border-radius: var(--radius-sm); padding: 8px 10px; font: var(--type-sm); line-height: 1.5; box-sizing: border-box; }
+.vtxt-actions { display: flex; align-items: center; gap: 10px; }
+.vtxt-copied { font: var(--type-xs); color: var(--vela-success); }
 
 /* Vela Button */
 .vbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: var(--control-md); padding: 0 16px; font: var(--weight-semibold) var(--text-base)/1 var(--font-sans); letter-spacing: var(--tracking-snug); border: 1px solid transparent; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; transition: background 120ms, color 120ms, transform 80ms, box-shadow 120ms; }
@@ -466,8 +634,8 @@
   background: var(--vela-bg);
   border: 1px solid var(--vela-border);
   border-radius: var(--radius-lg);
-  width: 600px;
-  max-width: 90%;
+  width: 740px;
+  max-width: 92%;
   max-height: 90vh;
   overflow: hidden;
   display: flex;
@@ -476,6 +644,9 @@
 }
 .settings-overlay-content .settings {
   padding: 24px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .settings-close {
   position: absolute;
@@ -496,6 +667,209 @@
 .settings-close svg {
   width: 14px;
   height: 14px;
+}
+
+/* "Gespeichert"-Hinweis: blendet kurz ein, sobald sich ein Setting ändert. */
+.settings-saved {
+  position: absolute;
+  top: 16px;
+  right: 52px;
+  z-index: 2;
+  font: var(--type-caption);
+  color: var(--vela-success);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 200ms ease, transform 200ms ease;
+  pointer-events: none;
+}
+.settings-saved.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Podcast-Folgen-Auswahldialog (nutzt denselben .settings-overlay Backdrop) */
+.podpick-content {
+  background: var(--vela-bg);
+  border: 1px solid var(--vela-border);
+  border-radius: var(--radius-lg);
+  width: 560px;
+  max-width: 92%;
+  max-height: 82vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-xl);
+  animation: slide-in 160ms ease-out;
+}
+
+.podpick-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 16px 12px 20px;
+  border-bottom: 1px solid var(--vela-border-subtle);
+  flex-shrink: 0;
+}
+.podpick-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: var(--weight-semibold) var(--text-base)/1 var(--font-sans);
+  color: var(--vela-text);
+  flex: 1;
+}
+.podpick-title svg { width: 17px; height: 17px; color: var(--vela-primary); }
+
+.podpick-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 20px;
+  color: var(--vela-text-3);
+  font: var(--type-sm);
+  justify-content: center;
+}
+.podpick-status-error {
+  color: var(--vela-danger);
+}
+.podpick-status-error svg { flex-shrink: 0; width: 16px; height: 16px; }
+
+.podpick-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--vela-border-subtle);
+  flex-shrink: 0;
+}
+/* Eigene Zeile für die Auswahlzahl, oberhalb der Buttons – so verschiebt eine
+   wechselnde Ziffernbreite (z. B. "5 von 300" ↔ "300 von 300") nie die
+   Buttons darunter, weil sie in einer eigenen Blockzeile steht. */
+.podpick-count-line {
+  font: var(--type-caption);
+  color: var(--vela-text-3);
+  font-variant-numeric: tabular-nums;
+}
+.podpick-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.podpick-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.podpick-chip {
+  background: var(--vela-surface-3);
+  border: 1px solid var(--vela-border);
+  color: var(--vela-text-2);
+  font: var(--type-caption);
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background 100ms, color 100ms, border-color 100ms;
+  white-space: nowrap;
+}
+.podpick-chip:hover {
+  background: var(--vela-overlay, #2e3140);
+  border-color: var(--vela-border-strong);
+  color: var(--vela-text);
+}
+.podpick-count-inp {
+  width: 52px;
+  height: 26px;
+  background: var(--vela-surface-3);
+  border: 1px solid var(--vela-border);
+  border-radius: var(--radius-sm);
+  color: var(--vela-text);
+  font: var(--type-caption);
+  text-align: center;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+  -moz-appearance: textfield;
+}
+.podpick-count-inp:focus {
+  border-color: var(--vela-primary-line);
+  box-shadow: var(--ring-focus);
+}
+
+.podpick-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--vela-border) transparent;
+}
+.podpick-list::-webkit-scrollbar { width: 6px; }
+.podpick-list::-webkit-scrollbar-track { background: transparent; margin: 8px 0; }
+.podpick-list::-webkit-scrollbar-thumb { background: var(--vela-border); border-radius: 999px; }
+.podpick-list::-webkit-scrollbar-thumb:hover { background: var(--vela-text-3); }
+
+.podpick-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 100ms;
+  user-select: none;
+}
+.podpick-row:hover {
+  background: var(--vela-surface-2);
+}
+.podpick-check {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--vela-border-strong);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  background: transparent;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.podpick-check svg { width: 12px; height: 12px; }
+.podpick-row.checked .podpick-check {
+  background: var(--vela-primary);
+  border-color: var(--vela-primary);
+  color: var(--vela-on-primary);
+}
+.podpick-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.podpick-row-title {
+  font: var(--type-sm);
+  color: var(--vela-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.35;
+}
+.podpick-row-date {
+  font: var(--type-xs);
+  color: var(--vela-text-3);
+  margin-top: 3px;
+}
+
+.podpick-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--vela-border-subtle);
+  flex-shrink: 0;
 }
 
 /* Global overrides für Electron */

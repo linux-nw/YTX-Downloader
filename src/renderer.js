@@ -14,6 +14,9 @@ const getYtxAPI = () => {
       startDownload: async () => ({ ok: false, error: "Download ist nur in Electron verfügbar." }),
       cancelDownload: async () => ({ ok: true }),
       openFolder: async () => ({ ok: true }),
+      openFile: async () => ({ ok: true }),
+      deleteFile: async () => ({ ok: true }),
+      resolvePodcast: async () => ({ ok: false, error: "Nur in Electron verfügbar." }),
       onStarted: noopListen,
       onProgress: noopListen,
       onLog: noopListen,
@@ -33,7 +36,7 @@ if (!window.VelaDesignSystem_f6c677) {
   console.warn('Vela Design System Bundle nicht geladen');
 }
 
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useLayoutEffect, useCallback, useRef } = React;
 
 // Dateinamen aus einem yt-dlp Logeintrag extrahieren (best effort)
 function parseFilenameFromLog(line) {
@@ -44,6 +47,30 @@ function parseFilenameFromLog(line) {
   const full = match[1].trim();
   const parts = full.split(/[\\/]/);
   return parts[parts.length - 1] || full;
+}
+
+// Verlauf-Zeitstempel im Format TT.MM.JJ:HH.MM (fester Wunschformat, nicht Locale-abhängig).
+function formatHistoryTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${pad(d.getFullYear() % 100)}:${pad(d.getHours())}.${pad(d.getMinutes())}`;
+}
+
+// Episoden-Datum im Folgen-Auswahldialog: Roh-RSS-Datum ("Wed, 02 Jul 2026 …")
+// in ein kurzes, lesbares Format bringen; unparsebare Werte unverändert zeigen.
+function formatPubDate(raw) {
+  if (!raw) return '';
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+// Dateiformat-Tag (MP4/MP3/TXT) samt Farbe je Format – dieselben Farben wie bei
+// den Format-Icons (Video=teal, Audio=indigo, Transkript=lila).
+function formatTagInfo(format) {
+  if (format === 'transcript') return { label: 'TXT', color: 'var(--vela-tertiary, oklch(0.78 0.15 300))' };
+  if (format === 'audio') return { label: 'MP3', color: 'var(--vela-audio)' };
+  return { label: 'MP4', color: 'var(--vela-video)' };
 }
 
 // Heuristik: Sieht die URL nach einer Playlist/Sammlung aus? Deckt die gängigen
@@ -57,6 +84,50 @@ function looksLikePlaylist(url) {
   if (!url) return false;
   return /(\bplaylist\b)|([?&](list|playlist)=)|([?&]index=\d)|(\/sets\/)|(\/albums?\/)|(\/showcase\/)|(\/series\/)/i.test(url);
 }
+
+// Heuristik: Sieht die URL nach einem Podcast-RSS-Feed aus? Deckt die
+// gängigen Hosting-Anbieter ab (Hostname beginnt oft mit "feeds."/"feed.")
+// sowie typische Pfad-/Endungsmuster – ohne den Feed selbst abzufragen,
+// rein für die Format-Vorauswahl in der UI.
+function looksLikePodcastFeed(url) {
+  if (!url) return false;
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (!/^https?:$/i.test(u.protocol)) return false;
+  const host = u.hostname.replace(/^www\./, '');
+  if (/^feeds?\./i.test(host)) return true;
+  if (/(^|\.)(anchor\.fm|libsyn\.com|feedburner\.com|feedpress\.me)$/i.test(host)) return true;
+  if (/\.(xml|rss)(\?|$)/i.test(u.pathname)) return true;
+  if (/\/(rss|feed)(\/|\.xml)?$/i.test(u.pathname)) return true;
+  return false;
+}
+
+// Erkennt die Plattform anhand des Hostnamens für das kleine Badge neben der
+// URL-Leiste – rein kosmetisch/informativ, ändert nichts am Download selbst
+// (der läuft für alle über dieselbe yt-dlp-Pipeline). Bei SoundCloud/Bandcamp
+// zusätzlich ein Hinweis, dass Downloads dort oft vom Urheber selbst erlaubt sind.
+const PLATFORMS = [
+  { id: 'youtube', label: 'YouTube', re: /(^|\.)youtube\.com$|^youtu\.be$/i },
+  { id: 'twitch', label: 'Twitch', re: /(^|\.)twitch\.tv$/i },
+  { id: 'tiktok', label: 'TikTok', re: /(^|\.)tiktok\.com$/i },
+  { id: 'instagram', label: 'Instagram', re: /(^|\.)instagram\.com$/i },
+  { id: 'twitter', label: 'X / Twitter', re: /(^|\.)(twitter\.com|x\.com)$/i },
+  { id: 'facebook', label: 'Facebook', re: /(^|\.)facebook\.com$|^fb\.watch$/i },
+  { id: 'reddit', label: 'Reddit', re: /(^|\.)reddit\.com$/i },
+  { id: 'vimeo', label: 'Vimeo', re: /(^|\.)vimeo\.com$/i },
+  { id: 'dailymotion', label: 'Dailymotion', re: /(^|\.)dailymotion\.com$/i },
+  { id: 'bilibili', label: 'Bilibili', re: /(^|\.)bilibili\.com$/i },
+  { id: 'soundcloud', label: 'SoundCloud', re: /(^|\.)soundcloud\.com$/i, note: 'Download hier oft vom Künstler erlaubt' },
+  { id: 'bandcamp', label: 'Bandcamp', re: /\.bandcamp\.com$/i, note: 'Download hier oft vom Künstler erlaubt' }
+];
+
+function detectPlatform(url) {
+  if (!url) return null;
+  let host;
+  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { return null; }
+  return PLATFORMS.find((p) => p.re.test(host)) || null;
+}
+
 
 // SVG Icons
 function IconDownload() {
@@ -87,6 +158,14 @@ function IconAudio() {
   return <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>;
 }
 
+function IconText() {
+  return <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>;
+}
+
+function IconPodcast() {
+  return <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11a8 8 0 0 1 16 0"/><path d="M6.5 11a5.5 5.5 0 0 1 11 0"/><circle cx="12" cy="11" r="2"/><path d="M12 13v3"/><path d="M9 20h6"/></svg>;
+}
+
 function IconClose() {
   return <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><line x1="0" y1="0" x2="10" y2="10"/><line x1="10" y1="0" x2="0" y2="10"/></svg>;
 }
@@ -112,17 +191,34 @@ function VelaApp() {
   const [url, setUrl] = useState('');
   const [format, setFormat] = useState('video');
   const [quality, setQuality] = useState('1080p');
+  const [transcriptLang, setTranscriptLang] = useState('auto');
+  const [whisperModel, setWhisperModel] = useState('base');
   const [playlistMode, setPlaylistMode] = useState('single');
   const [downloads, setDownloads] = useState([]);
+  const [history, setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ytx-history') || '[]'); } catch { return []; }
+  });
+  const [expandedHistoryId, setExpandedHistoryId] = useState(null);
+  const [copiedHistoryId, setCopiedHistoryId] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
   const [folder, setFolder] = useState('');
   const [autoStart, setAutoStart] = useState(true);
   const [notifications, setNotifications] = useState(true);
   const [openAfter, setOpenAfter] = useState(false);
+  const [openFileAfter, setOpenFileAfter] = useState(false);
   const [encoding, setEncoding] = useState('utf-8');
   const [cookiesBrowser, setCookiesBrowser] = useState('none');
   const [playwrightFallback, setPlaywrightFallback] = useState(false);
+  const [coverArt, setCoverArt] = useState('default');
   const [theme, setTheme] = useState('dark');
+  // Podcast-Folgenauswahl: null = geschlossen, sonst { feedUrl, loading, error, episodes }.
+  const [podcastPicker, setPodcastPicker] = useState(null);
+  // Anpassbare Anzahl für die "Erste N" / "Letzte N" Schnellauswahl im Folgen-Dialog.
+  // Als String gehalten (nicht Number), damit das Feld beim Leeren wirklich leer
+  // bleibt statt auf "0" zu springen.
+  const [episodeCountInput, setEpisodeCountInput] = useState('5');
   // Backend-Abhängigkeiten (Default true, damit vor der Prüfung keine Warnung blitzt)
   const [deps, setDeps] = useState({ ytDlpAvailable: true, ffmpegAvailable: true });
 
@@ -138,6 +234,8 @@ function VelaApp() {
   useEffect(() => { notificationsRef.current = notifications; }, [notifications]);
   const openAfterRef = useRef(openAfter);
   useEffect(() => { openAfterRef.current = openAfter; }, [openAfter]);
+  const openFileAfterRef = useRef(openFileAfter);
+  useEffect(() => { openFileAfterRef.current = openFileAfter; }, [openFileAfter]);
   const downloadsRef = useRef(downloads);
   useEffect(() => { downloadsRef.current = downloads; }, [downloads]);
 
@@ -154,12 +252,20 @@ function VelaApp() {
       if (savedNotif !== null) setNotifications(savedNotif === 'true');
       const savedOpenAfter = localStorage.getItem('ytx-open-after');
       if (savedOpenAfter !== null) setOpenAfter(savedOpenAfter === 'true');
+      const savedOpenFileAfter = localStorage.getItem('ytx-open-file-after');
+      if (savedOpenFileAfter !== null) setOpenFileAfter(savedOpenFileAfter === 'true');
       const savedEncoding = localStorage.getItem('ytx-encoding');
       if (savedEncoding) setEncoding(savedEncoding);
       const savedCookies = localStorage.getItem('ytx-cookies-browser');
       if (savedCookies) setCookiesBrowser(savedCookies);
       const savedPw = localStorage.getItem('ytx-playwright-fallback');
       if (savedPw !== null) setPlaywrightFallback(savedPw === 'true');
+      const savedCoverArt = localStorage.getItem('ytx-cover-art');
+      if (savedCoverArt) setCoverArt(savedCoverArt);
+      const savedModel = localStorage.getItem('ytx-whisper-model');
+      if (savedModel) setWhisperModel(savedModel);
+      const savedLang = localStorage.getItem('ytx-transcript-lang');
+      if (savedLang) setTranscriptLang(savedLang);
 
       try {
         const state = await ytx.getState();
@@ -188,12 +294,45 @@ function VelaApp() {
   }, [theme, ytx]);
 
   // Verhalten-Einstellungen persistieren
+  useEffect(() => { if (folder) localStorage.setItem('ytx-output-folder', folder); }, [folder]);
   useEffect(() => { localStorage.setItem('ytx-auto-start', String(autoStart)); }, [autoStart]);
   useEffect(() => { localStorage.setItem('ytx-notifications', String(notifications)); }, [notifications]);
   useEffect(() => { localStorage.setItem('ytx-open-after', String(openAfter)); }, [openAfter]);
+  useEffect(() => { localStorage.setItem('ytx-open-file-after', String(openFileAfter)); }, [openFileAfter]);
   useEffect(() => { localStorage.setItem('ytx-encoding', encoding); }, [encoding]);
   useEffect(() => { localStorage.setItem('ytx-cookies-browser', cookiesBrowser); }, [cookiesBrowser]);
   useEffect(() => { localStorage.setItem('ytx-playwright-fallback', String(playwrightFallback)); }, [playwrightFallback]);
+  useEffect(() => { localStorage.setItem('ytx-cover-art', coverArt); }, [coverArt]);
+  useEffect(() => { localStorage.setItem('ytx-whisper-model', whisperModel); }, [whisperModel]);
+  useEffect(() => { localStorage.setItem('ytx-transcript-lang', transcriptLang); }, [transcriptLang]);
+  useEffect(() => { localStorage.setItem('ytx-history', JSON.stringify(history)); }, [history]);
+
+  // Format automatisch an die eingefügte URL anpassen, damit keine unsinnige
+  // Kombination (z. B. Podcast-Format bei einem YouTube-Link) stehen bleibt.
+  // Sieht die URL nach einem RSS-Feed aus → auf Podcast wechseln, sonst weg
+  // von Podcast zurück auf Video (die anderen drei Formate bleiben, wie sie waren).
+  useEffect(() => {
+    if (!url.trim()) return;
+    const feedLikely = looksLikePodcastFeed(url);
+    if (feedLikely && format !== 'podcast') {
+      setFormat('podcast');
+    } else if (!feedLikely && format === 'podcast') {
+      setFormat('video');
+      setQuality('1080p');
+    }
+  }, [url]);
+
+  // Kurzer "Gespeichert"-Hinweis in den Einstellungen bei jeder Änderung –
+  // übersprungen beim ersten Mount (Laden der gespeicherten Werte ist kein "Speichern").
+  const settingsMountedRef = useRef(false);
+  const settingsSavedTimeoutRef = useRef(null);
+  useEffect(() => {
+    if (!settingsMountedRef.current) { settingsMountedRef.current = true; return; }
+    setSettingsSaved(true);
+    clearTimeout(settingsSavedTimeoutRef.current);
+    settingsSavedTimeoutRef.current = setTimeout(() => setSettingsSaved(false), 1800);
+    return () => clearTimeout(settingsSavedTimeoutRef.current);
+  }, [folder, autoStart, notifications, openAfter, openFileAfter, encoding, cookiesBrowser, playwrightFallback, coverArt, whisperModel, transcriptLang]);
 
   // Backend Events: Fortschritt, Logs, Abschluss, Fehler
   useEffect(() => {
@@ -215,23 +354,53 @@ function VelaApp() {
 
     const unsubscribeLog = ytx.onLog((line) => {
       console.log('[Backend]', line);
+      // Whisper-Phase markieren, damit die Zeile einen unbestimmten Fortschritt zeigt.
+      if (/^\[Whisper\]/.test(line)) updateActive({ transcribing: true });
+      // Bei Podcast-Episoden bleibt der saubere Episodentitel stehen, statt vom
+      // (oft technischeren) Dateinamen aus dem Enclosure-Link überschrieben zu werden.
+      const activeItem = downloadsRef.current.find(d => d.id === activeIdRef.current);
+      if (activeItem && activeItem.displayNameLocked) return;
       const name = parseFilenameFromLog(line);
       if (name) updateActive({ filename: name });
     });
 
-    const unsubscribeCompleted = ytx.onCompleted(() => {
+    const unsubscribeCompleted = ytx.onCompleted((payload) => {
       const id = activeIdRef.current;
       activeIdRef.current = null;
       const item = downloadsRef.current.find(d => d.id === id);
+      // Fertige Datei: Video-/MP3-Pfad oder – bei Transkripten – die .txt-Datei.
+      const targetPath = payload && (payload.filePath || payload.transcriptPath);
       if (notificationsRef.current && item && typeof Notification !== 'undefined') {
         try {
-          new Notification('Download abgeschlossen', { body: item.filename || item.url });
+          const n = new Notification('Download abgeschlossen', { body: item.filename || item.url });
+          // Klick auf die Benachrichtigung öffnet die fertige Datei direkt.
+          n.onclick = () => ytx.openFile(targetPath || folderRef.current);
         } catch (e) { /* Notification nicht verfügbar */ }
       }
       if (openAfterRef.current) {
         ytx.openFolder(folderRef.current);
       }
-      setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'done', progress: 100, speed: undefined, eta: undefined } : d));
+      if (openFileAfterRef.current && targetPath) {
+        ytx.openFile(targetPath);
+      }
+      // Abgeschlossene Downloads wandern sofort in den Verlauf, statt in der
+      // Warteschlange als "done" liegen zu bleiben.
+      setDownloads(prev => prev.filter(d => d.id !== id));
+      if (item) {
+        const entry = {
+          id: item.id,
+          url: item.url,
+          filename: item.filename,
+          format: item.format,
+          completedAt: Date.now(),
+          outputFolder: (payload && payload.outputFolder) || folderRef.current,
+          filePath: payload && payload.filePath,
+          transcriptText: payload && payload.transcriptText,
+          transcriptPath: payload && payload.transcriptPath,
+          thumbnailUrl: payload && payload.thumbnailUrl
+        };
+        setHistory(prev => [entry, ...prev].slice(0, 20));
+      }
     });
 
     const unsubscribeFailed = ytx.onFailed((message) => {
@@ -256,16 +425,21 @@ function VelaApp() {
 
     const options = {
       url: item.url,
-      format: item.format === 'audio' ? 'mp3' : 'mp4',
+      format: item.format === 'audio' ? 'mp3' : item.format === 'transcript' ? 'transcript' : 'mp4',
       quality: item.format === 'video' ? String(item.quality).replace(/p$/i, '') : undefined,
-      audioQuality: item.format === 'audio' ? String(item.quality).toUpperCase() : undefined,
+      audioQuality: item.format === 'audio' && item.quality ? String(item.quality).toUpperCase() : undefined,
+      lang: item.format === 'transcript' ? (item.lang || 'auto') : undefined,
+      whisperModel: item.whisperModel || 'base',
       playlistMode: item.playlistMode === 'single' ? 'single-video'
         : item.playlistMode === 'combined' ? 'playlist-combined'
         : 'playlist-items',
       outputFolder: folderRef.current,
       encoding: item.encoding || 'utf-8',
       cookiesBrowser: item.cookiesBrowser || 'none',
-      playwrightFallback: !!item.playwrightFallback
+      playwrightFallback: !!item.playwrightFallback,
+      // Gilt für alle Formate: Video (MP4), Audio/Podcast-Folgen (MP3, echtes
+      // Einbetten) und Transkript (TXT, nur Vorschau im Verlauf).
+      embedCoverArt: item.coverArt === 'thumbnail'
     };
 
     ytx.startDownload(options).then(result => {
@@ -288,32 +462,125 @@ function VelaApp() {
     if (next) startItem(next);
   }, [downloads, startItem]);
 
-  // Download zur Warteschlange hinzufügen
+  // Podcast-RSS-Feed auflösen und den Folgen-Auswahldialog öffnen. Der eigent-
+  // liche Download startet erst, wenn der Nutzer im Dialog bestätigt – vorher
+  // wird nichts zur Warteschlange hinzugefügt.
+  const openPodcastPicker = useCallback((feedUrl) => {
+    setPodcastPicker({ feedUrl, loading: true, error: null, episodes: [] });
+    ytx.resolvePodcast(feedUrl).then(result => {
+      setPodcastPicker(prev => {
+        if (!prev || prev.feedUrl !== feedUrl) return prev; // zwischenzeitlich geschlossen/ersetzt
+        if (!result.ok) return { ...prev, loading: false, error: result.error };
+        return {
+          ...prev,
+          loading: false,
+          episodes: result.episodes.map((ep, idx) => ({ ...ep, idx, selected: true }))
+        };
+      });
+    }).catch(err => {
+      setPodcastPicker(prev => (prev && prev.feedUrl === feedUrl) ? { ...prev, loading: false, error: String(err) } : prev);
+    });
+  }, [ytx]);
+
+  const closePodcastPicker = useCallback(() => setPodcastPicker(null), []);
+
+  const toggleEpisode = useCallback((idx) => {
+    setPodcastPicker(prev => prev ? { ...prev, episodes: prev.episodes.map(ep => ep.idx === idx ? { ...ep, selected: !ep.selected } : ep) } : prev);
+  }, []);
+
+  const selectAllEpisodes = useCallback((selected) => {
+    setPodcastPicker(prev => prev ? { ...prev, episodes: prev.episodes.map(ep => ({ ...ep, selected })) } : prev);
+  }, []);
+
+  // Feeds listen Folgen typischerweise neueste zuerst – "Erste N" = Anfang der
+  // Liste (neueste), "Letzte N" = Ende der Liste (älteste). n=0 ist explizit
+  // erlaubt (wählt nichts aus) statt auf mindestens 1 hochgezwungen zu werden.
+  const selectFirstN = useCallback((n) => {
+    setPodcastPicker(prev => {
+      if (!prev) return prev;
+      const count = Math.max(0, Math.min(n, prev.episodes.length));
+      return { ...prev, episodes: prev.episodes.map((ep, i) => ({ ...ep, selected: i < count })) };
+    });
+  }, []);
+
+  const selectLastN = useCallback((n) => {
+    setPodcastPicker(prev => {
+      if (!prev) return prev;
+      const total = prev.episodes.length;
+      const count = Math.max(0, Math.min(n, total));
+      return { ...prev, episodes: prev.episodes.map((ep, i) => ({ ...ep, selected: i >= total - count })) };
+    });
+  }, []);
+
+  // Bestätigung: nur die ausgewählten Folgen zur Warteschlange hinzufügen
+  // (Audio, URL = direkter Enclosure-Link → läuft über die normale MP3-
+  // Pipeline, yt-dlp lädt direkt verlinkte Audiodateien direkt).
+  const confirmPodcastPicker = useCallback(() => {
+    setPodcastPicker(prev => {
+      if (!prev) return prev;
+      const selected = prev.episodes.filter(ep => ep.selected);
+      if (selected.length === 0) return prev;
+      const base = Date.now();
+      const newDownloads = selected.map((ep, i) => ({
+        id: base + i,
+        url: ep.audioUrl,
+        filename: ep.title,
+        displayNameLocked: true,
+        format: 'audio',
+        quality,
+        encoding,
+        cookiesBrowser,
+        playwrightFallback,
+        coverArt,
+        status: autoStart ? 'queued' : 'paused',
+        progress: 0,
+        filesize: undefined,
+        speed: undefined,
+        eta: undefined
+      }));
+      setDownloads(dl => [...newDownloads, ...dl]);
+      return null;
+    });
+  }, [quality, encoding, cookiesBrowser, playwrightFallback, coverArt, autoStart]);
+
+  // Download(s) zur Warteschlange hinzufügen. Erkennt mehrere Links auf einmal
+  // (einer pro Zeile/durch Leerraum getrennt, z. B. aus der Zwischenablage
+  // eingefügt) und legt für jeden einen eigenen Eintrag an.
   const addDownload = useCallback(() => {
     const trimmed = url.trim();
     if (!trimmed) return;
 
-    const id = Date.now();
-    const newDownload = {
-      id,
-      url: trimmed,
-      filename: trimmed,
+    if (format === 'podcast') {
+      openPodcastPicker(trimmed);
+      setUrl('');
+      return;
+    }
+
+    const urls = trimmed.split(/\s+/).map(s => s.trim()).filter(Boolean);
+    const base = Date.now();
+    const newDownloads = urls.map((u, i) => ({
+      id: base + i,
+      url: u,
+      filename: u,
       format,
       quality,
+      lang: transcriptLang,
+      whisperModel,
       playlistMode,
       encoding,
       cookiesBrowser,
       playwrightFallback,
+      coverArt,
       status: autoStart ? 'queued' : 'paused',
       progress: 0,
       filesize: undefined,
       speed: undefined,
       eta: undefined
-    };
+    }));
 
-    setDownloads(prev => [newDownload, ...prev]);
+    setDownloads(prev => [...newDownloads, ...prev]);
     setUrl('');
-  }, [url, format, quality, playlistMode, encoding, cookiesBrowser, playwrightFallback, autoStart]);
+  }, [url, format, quality, transcriptLang, whisperModel, playlistMode, encoding, cookiesBrowser, playwrightFallback, coverArt, autoStart, openPodcastPicker]);
 
   // Download entfernen (aktiven Download zuvor abbrechen)
   const removeDownload = (id) => {
@@ -339,42 +606,88 @@ function VelaApp() {
     const selected = await ytx.selectFolder();
     if (selected) {
       setFolder(selected);
-      localStorage.setItem('ytx-output-folder', selected);
     }
   };
 
-  // Alle abgeschlossenen/fehlerhaften entfernen, aktive behalten
-  const clearFinished = () => {
-    setDownloads(prev => prev.filter(d => d.status === 'downloading' || d.status === 'queued'));
+  // Fehlgeschlagene aus der Warteschlange entfernen (aktive/wartende bleiben)
+  const clearErrors = () => {
+    setDownloads(prev => prev.filter(d => d.status !== 'error'));
+  };
+
+  // Einzelnen Verlaufseintrag entfernen – löscht dabei auch die zugehörige Datei
+  // auf der Festplatte (Transkript-.txt bzw. Video-/Audiodatei), nicht nur den Eintrag.
+  const removeHistoryEntry = (id) => {
+    const entry = history.find(h => h.id === id);
+    const target = entry && (entry.transcriptPath || entry.filePath);
+    if (target) {
+      ytx.deleteFile(target).catch(err => console.error('Datei konnte nicht gelöscht werden:', err));
+    }
+    setHistory(prev => prev.filter(h => h.id !== id));
+    if (expandedHistoryId === id) setExpandedHistoryId(null);
+  };
+
+  // Gesamten Verlauf leeren
+  const clearHistory = () => {
+    setHistory([]);
+    setExpandedHistoryId(null);
+  };
+
+  // Transkript-Text in die Zwischenablage kopieren
+  const copyTranscript = (id, text) => {
+    navigator.clipboard.writeText(text || '').then(() => {
+      setCopiedHistoryId(id);
+      setTimeout(() => setCopiedHistoryId(current => current === id ? null : current), 1800);
+    });
   };
 
   // Anzahl aktive Downloads
   const activeCount = downloads.filter(d => d.status === 'downloading' || d.status === 'queued').length;
-  const completedCount = downloads.filter(d => d.status === 'done').length;
+  const completedCount = history.length;
 
   // Format-Optionen
   const qualityOptions = format === 'video'
     ? [{ value: '480p', label: '480p SD' }, { value: '720p', label: '720p HD' }, { value: '1080p', label: '1080p FHD' }, { value: '2160p', label: '4K UHD' }]
     : [{ value: '128k', label: '128 kbps' }, { value: '192k', label: '192 kbps' }, { value: '256k', label: '256 kbps' }, { value: '320k', label: '320 kbps (best)' }];
 
+  // Sprach-Optionen für das Transkript (Untertitel-Auswahl bzw. Whisper-Sprache).
+  // Standard ist "Automatisch": die Sprache wird per KI erkannt (Whisper erkennt
+  // sie selbst, sofern keine feste Sprache vorgegeben ist).
+  const langOptions = [
+    { value: 'auto', label: 'Automatisch erkennen (empfohlen)' },
+    { value: 'de', label: 'Deutsch' },
+    { value: 'en', label: 'English' },
+    { value: 'es', label: 'Español' },
+    { value: 'fr', label: 'Français' },
+    { value: 'it', label: 'Italiano' },
+    { value: 'pt', label: 'Português' },
+    { value: 'all', label: 'Alle (Untertitel)' }
+  ];
+
   // Download Row Komponente
   function DownloadItem({ download }) {
     const pct = Math.min(100, Math.max(0, download.progress));
+    const isTranscript = download.format === 'transcript';
+    // Whisper liefert keinen Prozentwert → unbestimmter (laufender) Balken.
+    const indeterminate = download.status === 'queued' || download.status === 'paused' || (isTranscript && download.transcribing);
+    const downloadingLabel = isTranscript
+      ? (download.transcribing ? 'Transkribiere (Whisper)…' : 'Transkript wird erstellt…')
+      : (download.speed ? `${Math.round(pct)}% · ${download.speed}` : `${Math.round(pct)}%`);
     const label = download.status === 'queued' ? 'In Warteschlange' :
                     download.status === 'paused' ? 'Angehalten' :
-                    download.status === 'downloading' ? (download.speed ? `${Math.round(pct)}% · ${download.speed}` : `${Math.round(pct)}%`) :
-                    download.status === 'done' ? 'Fertig' :
+                    download.status === 'downloading' ? downloadingLabel :
                     download.status === 'error' ? 'Fehlgeschlagen' : download.status;
 
-    const fillClass = download.status === 'done' ? 'fd' :
-                      download.status === 'error' ? 'fe' :
-                      download.status === 'queued' || download.status === 'paused' ? 'fq' :
+    const fillClass = download.status === 'error' ? 'fe' :
+                      indeterminate ? 'fq' :
+                      isTranscript ? 'ft' :
                       download.format === 'audio' ? 'fa' : 'fv';
+
+    const icoClass = isTranscript ? 'vdli-transcript' : download.format === 'audio' ? 'vdli-audio' : 'vdli-video';
 
     return (
       <div className="vdlr">
-        <div className={`vdlr-ico ${download.format === 'audio' ? 'vdli-audio' : 'vdli-video'}`}>
-          {download.format === 'audio' ? <IconAudio /> : <IconVideo />}
+        <div className={`vdlr-ico ${icoClass}`}>
+          {isTranscript ? <IconText /> : download.format === 'audio' ? <IconAudio /> : <IconVideo />}
         </div>
         <div className="vdlr-body">
           <div className="vdlr-name" title={download.error || download.filename}>{download.filename}</div>
@@ -383,7 +696,7 @@ function VelaApp() {
             <span className={`vdlr-st st-${download.status}`}>{label}</span>
           </div>
           <div className="vdlr-track">
-            <div className={`vdlr-fill ${fillClass}`} style={(download.status === 'queued' || download.status === 'paused') ? { width: '100%' } : { width: (download.status === 'done' ? 100 : pct) + '%' }} />
+            <div className={`vdlr-fill ${fillClass}`} style={indeterminate ? { width: '100%' } : { width: pct + '%' }} />
           </div>
           {download.status === 'error' && download.error && (
             <div className="vdlr-err" title={download.error}>{download.error}</div>
@@ -392,33 +705,99 @@ function VelaApp() {
         <div className="vdlr-btns">
           {download.status === 'error' && <IconButton aria-label="Wiederholen" onClick={() => queueDownload(download.id)}><IconRetry /></IconButton>}
           {download.status === 'paused' && <IconButton aria-label="Starten" onClick={() => queueDownload(download.id)}><IconPlay /></IconButton>}
-          {download.status === 'done' && <IconButton aria-label="Ordner öffnen" onClick={openFolder}><IconFolder /></IconButton>}
           <IconButton aria-label="Entfernen" onClick={() => removeDownload(download.id)}><IconTrash /></IconButton>
         </div>
       </div>
     );
   }
 
-  // Eingabekarte
-  const InputCard = () => (
-    <div className="input-card">
-      {UrlBar({ value: url, onChange: setUrl, onPaste: (text) => setUrl(text) })}
-      <div className="opts-row">
-        {FormatToggle({ value: format, onChange: (v) => { setFormat(v); setQuality(v === 'video' ? '1080p' : '256k'); } })}
-        <div style={{ width: 155 }}>
-          <Select value={quality} onChange={setQuality} options={qualityOptions} />
+  // Verlauf-Eintrag: abgeschlossener Download, bei Transkript mit ausklappbarem
+  // Textfeld zum direkten Kopieren (Datei bleibt zusätzlich gespeichert).
+  function HistoryItem({ entry }) {
+    const isTranscript = entry.format === 'transcript';
+    const icoClass = isTranscript ? 'vdli-transcript' : entry.format === 'audio' ? 'vdli-audio' : 'vdli-video';
+    const expanded = expandedHistoryId === entry.id;
+    const time = formatHistoryTime(entry.completedAt);
+    const tag = formatTagInfo(entry.format);
+
+    const canToggle = isTranscript && !!entry.transcriptText;
+    const toggle = () => setExpandedHistoryId(expanded ? null : entry.id);
+
+    return (
+      <div className="vhist-item">
+        <div className="vdlr">
+          <div className={`vdlr-clickzone${canToggle ? ' vdlr-toggleable' : ''}`} onClick={canToggle ? toggle : undefined}>
+            <div className={`vdlr-ico ${icoClass}`}>
+              {entry.thumbnailUrl
+                ? <img className="vdlr-thumb" src={entry.thumbnailUrl} alt="" />
+                : isTranscript ? <IconText /> : entry.format === 'audio' ? <IconAudio /> : <IconVideo />}
+            </div>
+            <div className="vdlr-body">
+              <div className="vdlr-name" title={entry.filename}>{entry.filename}</div>
+              <div className="vdlr-meta">
+                <span className="vhist-time">{time}</span>
+                <span className="vhist-tag" style={{ color: tag.color }}>{tag.label}</span>
+              </div>
+            </div>
+          </div>
+          <div className="vdlr-btns">
+            {canToggle && (
+              <IconButton aria-label={expanded ? 'Text ausblenden' : 'Text anzeigen'} onClick={toggle}>
+                <IconText />
+              </IconButton>
+            )}
+            <IconButton aria-label="Ordner öffnen" onClick={() => ytx.openFolder(entry.outputFolder)}><IconFolder /></IconButton>
+            <IconButton aria-label="Aus Verlauf entfernen" onClick={() => removeHistoryEntry(entry.id)}><IconTrash /></IconButton>
+          </div>
         </div>
+        {expanded && canToggle && (
+          <div className="vtxt-panel">
+            <textarea className="vtxt-area" readOnly value={entry.transcriptText} onFocus={e => e.target.select()} />
+            <div className="vtxt-actions">
+              <Button variant="neutral" onClick={() => copyTranscript(entry.id, entry.transcriptText)}>Text kopieren</Button>
+              {copiedHistoryId === entry.id && <span className="vtxt-copied">Kopiert!</span>}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Eingabekarte
+  const InputCard = () => {
+    const platform = detectPlatform(url);
+    // Formate ausgrauen, die zur eingefügten URL nicht passen können: bei einem
+    // erkannten RSS-Feed sind Video/Audio/Transkript unmöglich, bei jeder
+    // anderen URL ist Podcast unmöglich. Leeres Feld → keine Einschränkung.
+    const disabledFormats = !url.trim() ? [] : looksLikePodcastFeed(url) ? ['video', 'audio', 'transcript'] : ['podcast'];
+    return (
+    <div className="input-card">
+      {UrlBar({
+        value: url, onChange: setUrl, onPaste: (text) => setUrl(text),
+        placeholder: format === 'podcast' ? 'Podcast-RSS-Feed-Link einfügen...' : 'Video- oder Playlist-URL einfügen... (auch mehrere, eine pro Zeile)'
+      })}
+      {platform && (
+        <div className="platform-badge">
+          <span className="platform-badge-dot" />
+          {platform.label} erkannt
+          {platform.note && <span className="platform-badge-note"> · {platform.note}</span>}
+        </div>
+      )}
+      <div className="opts-row">
+        {FormatToggle({ value: format, disabled: disabledFormats, onChange: (v) => { setFormat(v); if (v === 'video') setQuality('1080p'); else if (v === 'audio') setQuality('256k'); } })}
+        {format !== 'transcript' && <div style={{ width: 155 }}><Select value={quality} onChange={setQuality} options={qualityOptions} /></div>}
         <div style={{ flex: 1 }} />
         <button className="settings-btn" onClick={() => setShowSettings(true)} aria-label="Einstellungen" title="Einstellungen">
           <IconGear />
         </button>
         <Button variant={url.trim() ? 'primary' : 'neutral'} disabled={!url.trim()} onClick={addDownload}>
-          <IconDownload /> {autoStart ? 'Herunterladen' : 'Zur Warteschlange'}
+          <IconDownload /> {format === 'podcast' ? 'Folgen auswählen' : (autoStart ? 'Herunterladen' : 'Zur Warteschlange')}
         </Button>
       </div>
       {looksLikePlaylist(url) && <div className="pl-anim">{PlaylistMode({ mode: playlistMode, onChange: setPlaylistMode })}</div>}
     </div>
-  );
+    );
+  };
 
   // Download Tab
   const DownloadsTab = () => (
@@ -435,99 +814,280 @@ function VelaApp() {
           </span>
         </div>
       )}
-      <div className="dl-section">
-        <div className="dl-header">
-          <span className="dl-htitle">Warteschlange</span>
-          {activeCount > 0 && <Badge variant="primary">{activeCount} aktiv</Badge>}
-          <div style={{ flex: 1 }} />
-          {downloads.length > 0 && <button className="dl-clear" onClick={clearFinished}>Abgeschlossene entfernen</button>}
+      <div className="dl-sections">
+        <div className="dl-section">
+          <div className="dl-header">
+            <span className="dl-htitle">Warteschlange</span>
+            {activeCount > 0 && <Badge variant="primary">{activeCount} aktiv</Badge>}
+            <div style={{ flex: 1 }} />
+            {downloads.some(d => d.status === 'error') && <button className="dl-clear" onClick={clearErrors}>Fehlgeschlagene entfernen</button>}
+          </div>
+          {downloads.length === 0
+            ? <div className="empty"><p>Noch keine begonnenen Downloads.</p></div>
+            : <div className="dl-list">{downloads.map(d => <React.Fragment key={d.id}>{DownloadItem({ download: d })}</React.Fragment>)}</div>
+          }
         </div>
-        {downloads.length === 0
-          ? <div className="empty"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3" /></svg><p>Noch keine Downloads. Füge oben eine Video- oder Playlist-URL ein – YouTube, Vimeo, TikTok, SoundCloud und viele weitere Plattformen werden unterstützt.</p></div>
-          : <div className="dl-list">{downloads.map(d => <React.Fragment key={d.id}>{DownloadItem({ download: d })}</React.Fragment>)}</div>
-        }
+        <div className="dl-section">
+          <div className="dl-header">
+            <span className="dl-htitle">Verlauf</span>
+            <div style={{ flex: 1 }} />
+            {history.length > 0 && <button className="dl-clear" onClick={clearHistory}>Verlauf leeren</button>}
+          </div>
+          {history.length === 0
+            ? <div className="empty"><p>Noch keine abgeschlossenen Downloads.</p></div>
+            : <div className="dl-list">{history.map(h => <React.Fragment key={h.id}>{HistoryItem({ entry: h })}</React.Fragment>)}</div>
+          }
+        </div>
       </div>
     </>
   );
 
-  // Einstellungen
+  // Eine Karte für ein einzelnes Setting.
+  function SettingsCard({ label, hint, children }) {
+    return (
+      <div className="settings-card">
+        {label && <span className="settings-lbl">{label}</span>}
+        {children}
+        {hint && <div className="settings-hint">{hint}</div>}
+      </div>
+    );
+  }
+
+  // Einstellungen: "Standard" immer sichtbar, "Advanced" (Backend-nahe Optionen
+  // wie Whisper-Modell) ausklappbar. Jeweils 2 unabhängige Spalten (keine
+  // Grid-Zeilen), damit unterschiedlich hohe Karten (mit/ohne Hinweistext)
+  // keine Lücken zur Nachbarspalte reißen.
   const SettingsTab = () => (
     <div className="settings">
-      <div className="settings-section">
-        <span className="settings-lbl">Download-Ort</span>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <Input value={folder} onChange={setFolder} style={{ flex: 1, minWidth: '200px' }} />
-          <Button variant="neutral" onClick={chooseFolder}>Durchsuchen</Button>
-        </div>
-        <div style={{ color: 'var(--vela-text-3)', fontSize: '12px', marginTop: '4px', wordBreak: 'break-all' }}>
-          {folder}
+      <div className="settings-group">
+        <span className="settings-group-title">Standard</span>
+        {SettingsCard({
+          label: 'Download-Ort', hint: folder,
+          children: (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <Input value={folder} onChange={setFolder} style={{ flex: 1, minWidth: '200px' }} />
+              <Button variant="neutral" onClick={chooseFolder}>Durchsuchen</Button>
+            </div>
+          )
+        })}
+        <div className="settings-cols">
+          <div className="settings-col">
+            {SettingsCard({ children: <Switch checked={autoStart} onChange={setAutoStart} label="Direkt nach Hinzufügen starten" /> })}
+            {SettingsCard({ children: <Switch checked={openAfter} onChange={setOpenAfter} label="Ordner nach Abschluss öffnen" /> })}
+            {SettingsCard({
+              hint: 'Öffnet die heruntergeladene Datei direkt mit der Standard-App.',
+              children: <Switch checked={openFileAfter} onChange={setOpenFileAfter} label="Datei nach Abschluss öffnen" />
+            })}
+            {SettingsCard({
+              label: 'Cover-Bild', hint: 'Bettet das Video-Thumbnail als Cover-Art ein – bei Video (MP4) und Audio inkl. Podcast-Folgen (MP3). Bei Transkripten (TXT) nur als Vorschau im Verlauf, da reiner Text.',
+              children: (
+                <Select value={coverArt} onChange={setCoverArt} options={[
+                  { value: 'default', label: 'Standard (kein Cover)' },
+                  { value: 'thumbnail', label: 'Automatisch: Video-Thumbnail als Cover' }
+                ]} />
+              )
+            })}
+          </div>
+          <div className="settings-col">
+            {SettingsCard({ children: <Switch checked={notifications} onChange={setNotifications} label="Benachrichtigung bei Fertigstellung" /> })}
+            {SettingsCard({
+              label: 'Dateinamen-Kodierung', hint: 'UTF-8 wird empfohlen und funktioniert praktisch überall.',
+              children: (
+                <Select value={encoding} onChange={setEncoding} options={[
+                  { value: 'utf-8', label: 'UTF-8 (empfohlen)' },
+                  { value: 'cp1252', label: 'ANSI / Windows-1252' },
+                  { value: 'system', label: 'System-Standard' }
+                ]} />
+              )
+            })}
+            {SettingsCard({
+              label: 'Transkript-Sprache', hint: 'Wird normalerweise automatisch erkannt.',
+              children: <Select value={transcriptLang} onChange={setTranscriptLang} options={langOptions} />
+            })}
+          </div>
         </div>
       </div>
-      <div className="settings-section">
-        <span className="settings-lbl">Verhalten</span>
-        <Switch checked={autoStart} onChange={setAutoStart} label="Download direkt nach Hinzufügen starten" />
-        <Switch checked={notifications} onChange={setNotifications} label="Benachrichtigung bei Fertigstellung" />
-        <Switch checked={openAfter} onChange={setOpenAfter} label="Ordner nach Abschluss automatisch öffnen" />
-        <Switch checked={playwrightFallback} onChange={setPlaywrightFallback} label="Experimenteller Browser-Fallback (Playwright)" />
-        <div style={{ color: 'var(--vela-text-3)', fontSize: '12px', marginTop: '2px', paddingLeft: '44px' }}>
-          Letzter Versuch für JS-gerenderte Seiten ohne yt-dlp-Extractor. Startet headless Chromium, lauscht auf Video-Streams und übergibt gefundene URLs an yt-dlp. Langsamer und erfordert: <code style={{ fontFamily: 'monospace' }}>npm install playwright &amp;&amp; npx playwright install chromium</code>
-        </div>
-      </div>
-      <div className="settings-section">
-        <span className="settings-lbl">Dateinamen-Kodierung</span>
-        <div style={{ maxWidth: '300px' }}>
-          <Select value={encoding} onChange={setEncoding} options={[
-            { value: 'utf-8', label: 'UTF-8 (empfohlen)' },
-            { value: 'utf-8-sig', label: 'UTF-8 mit BOM' },
-            { value: 'utf-16', label: 'UTF-16' },
-            { value: 'ascii', label: 'ASCII' },
-            { value: 'cp1252', label: 'ANSI / Windows-1252 (USA, Westeuropa)' },
-            { value: 'latin-1', label: 'ISO-8859-1 (Latin-1)' },
-            { value: 'iso-8859-15', label: 'ISO-8859-15 (Latin-9, mit €)' },
-            { value: 'cp437', label: 'CP437 (DOS USA)' },
-            { value: 'cp850', label: 'CP850 (DOS Westeuropa)' },
-            { value: 'mac-roman', label: 'Mac Roman' },
-            { value: 'system', label: 'System-Standard' }
-          ]} />
-        </div>
-        <div style={{ color: 'var(--vela-text-3)', fontSize: '12px', marginTop: '2px' }}>
-          UTF-8 sorgt dafür, dass Umlaute (ü, ä, ö …) und Sonderzeichen im Dateinamen korrekt erscheinen statt als „?". Die übrigen sind klassische Codepages für ältere Systeme; im Zweifel UTF-8 lassen.
-        </div>
-      </div>
-      <div className="settings-section">
-        <span className="settings-lbl">Browser-Cookies (für Login / Altersschranken)</span>
-        <div style={{ maxWidth: '300px' }}>
-          <Select value={cookiesBrowser} onChange={setCookiesBrowser} options={[
-            { value: 'none', label: 'Keine' },
-            { value: 'chrome', label: 'Chrome' },
-            { value: 'firefox', label: 'Firefox' },
-            { value: 'edge', label: 'Edge' },
-            { value: 'brave', label: 'Brave' },
-            { value: 'opera', label: 'Opera' },
-            { value: 'vivaldi', label: 'Vivaldi' },
-            { value: 'chromium', label: 'Chromium' },
-            { value: 'whale', label: 'Whale' }
-          ]} />
-        </div>
-        <div style={{ color: 'var(--vela-text-3)', fontSize: '12px', marginTop: '2px' }}>
-          Übernimmt die Cookies des gewählten Browsers – nötig für Seiten, die Login oder eine Altersbestätigung verlangen. Bei „Keine" werden keine Cookies verwendet. (Der Browser muss installiert und sollte geschlossen sein.)
-        </div>
+
+      <div className="settings-group">
+        <button
+          className={`settings-advanced-toggle${showAdvanced ? ' open' : ''}`}
+          onClick={() => setShowAdvanced(v => !v)}
+          aria-expanded={showAdvanced}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          Advanced
+        </button>
+        {showAdvanced && (
+          <div className="settings-cols">
+            <div className="settings-col">
+              {SettingsCard({
+                label: 'Browser-Cookies', hint: 'Nötig bei Login/Altersschranken. Browser muss geschlossen sein.',
+                children: (
+                  <Select value={cookiesBrowser} onChange={setCookiesBrowser} options={[
+                    { value: 'none', label: 'Keine' },
+                    { value: 'chrome', label: 'Chrome' },
+                    { value: 'firefox', label: 'Firefox' },
+                    { value: 'edge', label: 'Edge' },
+                    { value: 'brave', label: 'Brave' },
+                    { value: 'opera', label: 'Opera' },
+                    { value: 'vivaldi', label: 'Vivaldi' },
+                    { value: 'chromium', label: 'Chromium' },
+                    { value: 'whale', label: 'Whale' }
+                  ]} />
+                )
+              })}
+              {SettingsCard({
+                children: <Switch checked={playwrightFallback} onChange={setPlaywrightFallback} label="Fallback für schwierige Seiten (experimentell)" />,
+                hint: 'Hilft bei Seiten, die sonst nicht funktionieren, ist aber langsamer.'
+              })}
+            </div>
+            <div className="settings-col">
+              {SettingsCard({
+                label: 'Whisper-Modell', hint: 'Größere Modelle sind genauer, aber deutlich langsamer.',
+                children: (
+                  <Select value={whisperModel} onChange={setWhisperModel} options={[
+                    { value: 'tiny', label: 'tiny – sehr schnell, ungenau' },
+                    { value: 'base', label: 'base – schnell (empfohlen)' },
+                    { value: 'small', label: 'small – genauer, langsamer' },
+                    { value: 'medium', label: 'medium – sehr genau, langsam' },
+                    { value: 'large', label: 'large – beste Qualität, sehr langsam' }
+                  ]} />
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 
-  // Format Toggle (Video / Audio)
-  function FormatToggle({ value, onChange }) {
+  // Podcast-Folgen-Auswahldialog: erscheint nach dem Auflösen des RSS-Feeds,
+  // bevor irgendetwas zur Warteschlange hinzugefügt wird. Erlaubt Einzelauswahl,
+  // Alle/Keine sowie eine anpassbare "Erste N"/"Letzte N"-Schnellauswahl.
+  const PodcastPickerModal = () => {
+    if (!podcastPicker) return null;
+    const { loading, error, episodes } = podcastPicker;
+    const selectedCount = episodes.filter(ep => ep.selected).length;
+    // Nur für Anzeige/Logik der Erste/Letzte-Buttons – das Eingabefeld selbst
+    // bleibt leer, solange der Nutzer nichts eingegeben hat (kein erzwungenes "0").
+    const episodeCount = Number(episodeCountInput) || 0;
+
+    return (
+      <div className="settings-overlay" onClick={closePodcastPicker}>
+        <div className="podpick-content" onClick={e => e.stopPropagation()}>
+          <div className="podpick-header">
+            <span className="podpick-title"><IconPodcast /> Folgen auswählen</span>
+            <IconButton aria-label="Schließen" onClick={closePodcastPicker}><IconClose /></IconButton>
+          </div>
+
+          {loading && (
+            <div className="podpick-status"><Spinner size="sm" color="primary" /> Feed wird geladen …</div>
+          )}
+
+          {!loading && error && (
+            <div className="podpick-status podpick-status-error"><IconWarn /> {error}</div>
+          )}
+
+          {!loading && !error && (
+            <>
+              <div className="podpick-toolbar">
+                <div className="podpick-count-line">{selectedCount} von {episodes.length}</div>
+                <div className="podpick-toolbar-row">
+                  <div className="podpick-toolbar-group">
+                    <button className="podpick-chip" onClick={() => selectAllEpisodes(true)}>Alle auswählen</button>
+                    <button className="podpick-chip" onClick={() => selectAllEpisodes(false)}>Alle abwählen</button>
+                  </div>
+                  <div className="podpick-toolbar-group">
+                    <button className="podpick-chip" onClick={() => selectFirstN(episodeCount)}>Erste {episodeCount}</button>
+                    <button className="podpick-chip" onClick={() => selectLastN(episodeCount)}>Letzte {episodeCount}</button>
+                    <input
+                      className="podpick-count-inp"
+                      type="number"
+                      min="0"
+                      value={episodeCountInput}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        // Nur Ziffern zulassen; leer bleibt leer (kein erzwungenes "0").
+                        if (raw === '' || /^\d+$/.test(raw)) {
+                          setEpisodeCountInput(raw);
+                        }
+                      }}
+                      aria-label="Anzahl für Erste/Letzte"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="podpick-list">
+                {episodes.map(ep => (
+                  <label key={ep.idx} className={`podpick-row${ep.selected ? ' checked' : ''}`}>
+                    <span className="podpick-check" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    </span>
+                    <input type="checkbox" checked={ep.selected} onChange={() => toggleEpisode(ep.idx)} hidden />
+                    <div className="podpick-row-body">
+                      <div className="podpick-row-title">{ep.title}</div>
+                      {ep.pubDate && <div className="podpick-row-date">{formatPubDate(ep.pubDate)}</div>}
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="podpick-footer">
+                <div style={{ flex: 1 }} />
+                <Button variant="neutral" onClick={closePodcastPicker}>Abbrechen</Button>
+                <Button variant="primary" disabled={selectedCount === 0} onClick={confirmPodcastPicker}>
+                  <IconDownload /> {selectedCount} Folge{selectedCount === 1 ? '' : 'n'} herunterladen
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Format Toggle (Video / Audio / Transkript) mit gleitender Markierung, die
+  // beim Wechsel über die Zwischen-Segmente slidet (immer teal, kein Farbwechsel je Format).
+  // Position/Breite werden aus den echten Button-Rects gemessen (offsetLeft/-Width),
+  // statt aus einer Gleich-Drittel-Annahme errechnet – Labels sind unterschiedlich lang
+  // (z. B. "Transkript" vs. "Audio"), ein Grid mit 1fr-Spalten gleicht das im
+  // Shrink-to-fit-Container nicht zuverlässig aus und lässt die Markierung driften.
+  function FormatToggle({ value, onChange, disabled }) {
     const isSelected = (mode) => value === mode;
+    const isDisabled = (mode) => !!disabled && disabled.includes(mode);
+    const btnRefs = useRef({});
+    const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+
+    useLayoutEffect(() => {
+      const btn = btnRefs.current[value];
+      if (!btn) return;
+      setIndicator({ left: btn.offsetLeft, width: btn.offsetWidth });
+    }, [value]);
+
+    // Ausgegraute Formate passen nicht zur eingefügten URL (z. B. Podcast bei
+    // einem YouTube-Link, oder Video/Audio/Transkript bei einem RSS-Feed) –
+    // Klick ist deaktiviert statt einfach nur optisch gedimmt zu sein.
+    const disabledTitle = 'Passt nicht zur eingefügten URL';
+
     return (
       <div className="vft" role="group">
-        <button className={`vft-btn vid${isSelected('video') ? ' on' : ''}`} onClick={() => onChange('video')}>
+        <div className="vft-indicator" style={{ transform: `translateX(${indicator.left}px)`, width: `${indicator.width}px` }} />
+        <button ref={(el) => { btnRefs.current.video = el; }} className={`vft-btn vid${isSelected('video') ? ' on' : ''}${isDisabled('video') ? ' vft-disabled' : ''}`} disabled={isDisabled('video')} title={isDisabled('video') ? disabledTitle : undefined} onClick={() => onChange('video')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 8-6 4 6 4V8z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
           Video <span className="vft-tag">MP4</span>
         </button>
-        <button className={`vft-btn aud${isSelected('audio') ? ' on' : ''}`} onClick={() => onChange('audio')}>
+        <button ref={(el) => { btnRefs.current.audio = el; }} className={`vft-btn aud${isSelected('audio') ? ' on' : ''}${isDisabled('audio') ? ' vft-disabled' : ''}`} disabled={isDisabled('audio')} title={isDisabled('audio') ? disabledTitle : undefined} onClick={() => onChange('audio')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           Audio <span className="vft-tag">MP3</span>
+        </button>
+        <button ref={(el) => { btnRefs.current.transcript = el; }} className={`vft-btn tns${isSelected('transcript') ? ' on' : ''}${isDisabled('transcript') ? ' vft-disabled' : ''}`} disabled={isDisabled('transcript')} title={isDisabled('transcript') ? disabledTitle : undefined} onClick={() => onChange('transcript')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+          Transkript <span className="vft-tag">TXT</span>
+        </button>
+        <button ref={(el) => { btnRefs.current.podcast = el; }} className={`vft-btn pod${isSelected('podcast') ? ' on' : ''}${isDisabled('podcast') ? ' vft-disabled' : ''}`} disabled={isDisabled('podcast')} title={isDisabled('podcast') ? disabledTitle : undefined} onClick={() => onChange('podcast')}>
+          <IconPodcast />
+          Podcast <span className="vft-tag">RSS</span>
         </button>
       </div>
     );
@@ -557,7 +1117,7 @@ function VelaApp() {
   }
 
   // UrlBar
-  function UrlBar({ value, onChange, onPaste }) {
+  function UrlBar({ value, onChange, onPaste, placeholder }) {
     const filled = value && value.length > 0;
     const handlePaste = async () => {
       try {
@@ -568,9 +1128,18 @@ function VelaApp() {
         onPaste && onPaste('');
       }
     };
+    // Klick irgendwo im Feld (außer Paste-Button) soll ins Textfeld fokussieren,
+    // nicht nur ein Klick direkt auf den schmalen <input>-Bereich.
+    const focusInput = (e) => {
+      if (e.target.closest('.vurl-paste')) return;
+      if (e.target.classList.contains('vurl-inp')) return; // native Klick-Positionierung nicht stören
+      e.preventDefault();
+      const input = e.currentTarget.querySelector('.vurl-inp');
+      if (input) input.focus();
+    };
     return (
-      <div className={`vurl${filled ? ' filled' : ''}`}>
-        <input className="vurl-inp" value={value} onChange={e => onChange && onChange(e.target.value)} placeholder="Video- oder Playlist-URL einfügen..." spellCheck={false} autoComplete="off"/>
+      <div className={`vurl${filled ? ' filled' : ''}`} onMouseDown={focusInput}>
+        <input className="vurl-inp" value={value} onChange={e => onChange && onChange(e.target.value)} placeholder={placeholder || "Video- oder Playlist-URL einfügen..."} spellCheck={false} autoComplete="off"/>
         {filled && <button className="vurl-clr" onClick={() => onChange && onChange('')} aria-label="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>}
         <button className="vurl-paste" onClick={handlePaste}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>Paste</button>
       </div>
@@ -581,7 +1150,11 @@ function VelaApp() {
   const TitleBar = () => (
     <div className="titlebar">
       <div className="tb-brand">
-        <svg width="22" height="22" viewBox="0 0 128 128" fill="none" stroke="currentColor" strokeWidth="7" strokeLinecap="round"><ellipse cx="64" cy="64" rx="60" ry="21"/><ellipse cx="64" cy="64" rx="60" ry="21" transform="rotate(60 64 64)"/><ellipse cx="64" cy="64" rx="60" ry="21" transform="rotate(120 64 64)"/><circle cx="64" cy="64" r="9" fill="currentColor" stroke="none"/></svg>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M12 3v11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          <path d="M7.5 10.5 12 15l4.5-4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M5 19h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.55"/>
+        </svg>
         <span className="tb-name">YTX Downloader</span>
       </div>
       <div className="tb-space" />
@@ -617,10 +1190,12 @@ function VelaApp() {
             <IconButton aria-label="Schließen" className="settings-close" onClick={() => setShowSettings(false)}>
               <IconClose />
             </IconButton>
+            <span className={`settings-saved${settingsSaved ? ' show' : ''}`}>Gespeichert</span>
             {SettingsTab()}
           </div>
         </div>
       )}
+      {podcastPicker && PodcastPickerModal()}
     </div>
   );
 }
