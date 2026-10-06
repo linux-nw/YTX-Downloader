@@ -4,8 +4,35 @@ const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 
+// Resolver-Architektur: URL -> SiteResolver -> Provider-URL(s) ->
+// ProviderResolver -> ResolvedMedia -> Downloader. Siehe ARCHITECTURE.md.
+const { createDefaultResolverManager } = require("./core/setup");
+const { createResolveContext } = require("./core/ResolveContext");
+const { createLogger } = require("./core/logger");
+const { ResolveErrorCode, toResolveError } = require("./core/errors");
+const { downloadUrlOf } = require("./core/types");
+const { SessionStore } = require("./auth/SessionStore");
+const {
+  runDownloadCascade,
+  buildFailureMessage,
+  buildYtDlpArgs,
+  buildSubtitleArgs,
+  buildPrintArgs,
+  normalizeEncoding,
+  normalizeWhisperModel,
+  ALLOWED_BROWSERS
+} = require("./downloader");
+
 let mainWindow;
 let activeDownload = null;
+// Bricht laufende Auflösungen (fetch, headless Browser) beim Abbrechen ab.
+let activeAbortController = null;
+
+// Registries werden einmal aufgebaut; neue Seiten/Hoster kommen über
+// src/sites bzw. src/providers dazu, nicht über Sonderfälle hier.
+const resolverManager = createDefaultResolverManager();
+// Session-Material bleibt ausschließlich im Speicher und nur kurz.
+const sessionStore = new SessionStore();
 // Wird von download:cancel gesetzt, damit mehrstufige Abläufe (Transkript) nach
 // einem Abbruch nicht mit der nächsten Stufe weitermachen.
 let cancelRequested = false;
@@ -73,138 +100,90 @@ const sendToRenderer = (channel, payload) => {
 
 const getDefaultDownloadFolder = () => app.getPath("downloads");
 
-// Erlaubte Zeichensätze für Dateinamen (= Python-Codec-Namen, an PYTHONIOENCODING).
-// "system" lässt die Umgebung unberührt. Unbekannte Werte → utf-8.
-const ALLOWED_ENCODINGS = new Set([
-  "system", "utf-8", "utf-8-sig", "utf-16", "ascii",
-  "cp1252", "latin-1", "iso-8859-15", "cp437", "cp850", "mac-roman"
-]);
-const normalizeEncoding = (enc) => (ALLOWED_ENCODINGS.has(enc) ? enc : "utf-8");
+// Struktur-Logger für die Auflösung: schreibt zusätzlich jede Zeile in das
+// Log-Fenster der App. Cookies/Tokens werden im Logger selbst entfernt.
+const createResolveLogger = () => createLogger({
+  sink: (line) => sendToRenderer("download:log", line)
+});
 
-// Browser, deren Cookies yt-dlp via --cookies-from-browser auslesen kann.
-const ALLOWED_BROWSERS = new Set([
-  "none", "chrome", "firefox", "edge", "brave", "opera", "vivaldi", "chromium", "safari", "whale"
-]);
+/**
+ * Baut den ResolveContext für einen Vorgang.
+ * Auth bleibt bewusst außerhalb der Resolver: hier wird nur die Art der
+ * Authentifizierung gesetzt (Browser-Referenz für Cookies), niemals
+ * Zugangsdaten. yt-dlp liest die Cookies selbst aus dem gewählten Browser.
+ */
+const buildResolveContext = ({ cookiesBrowser, playwrightFallback, signal, logger } = {}) => createResolveContext({
+  auth: cookiesBrowser && cookiesBrowser !== "none"
+    ? { type: "cookies", cookiesFromBrowser: cookiesBrowser }
+    : { type: "none" },
+  signal,
+  logger,
+  flags: { playwrightFallback: !!playwrightFallback },
+  services: { sessionStore }
+});
 
-// Whisper-Modelle (Sprache→Text). Größer = genauer aber langsamer. Default: base.
-const ALLOWED_WHISPER_MODELS = new Set(["tiny", "base", "small", "medium", "large"]);
-const normalizeWhisperModel = (m) => (ALLOWED_WHISPER_MODELS.has(m) ? m : "base");
+// Sucht yt-dlp.exe / python.exe an gängigen Installationsorten, falls sie nicht
+// im PATH liegen (typisch: pip-Installation in den Python-Scripts-Ordner, den
+// Windows nicht automatisch in den PATH einer GUI-App aufnimmt).
+const discoverWindowsBinaries = () => {
+  if (process.platform !== "win32") return [];
+  const found = [];
+  const exists = (p) => { try { return fs.existsSync(p); } catch { return false; } };
+  const pushExe = (p) => { if (exists(p)) found.push({ command: p, argsPrefix: [] }); };
+  const pushPy = (p) => { if (exists(p)) found.push({ command: p, argsPrefix: ["-m", "yt_dlp"] }); };
 
-// Heuristik: Sieht die Fehlermeldung nach einem Zugriffs-/Anti-Bot-Block aus
-// (403/410/429/451, Cloudflare, "Unable to download webpage" …)? Dann lohnt ein
-// generischer Wiederholungsversuch mit Browser-Impersonation – seitenübergreifend.
-const looksLikeBlock = (msg) => !!msg && /HTTP Error (4|5)\d\d|\b4(0[39]|10|29|51)\b|forbidden|blocked|cloudflare|captcha|Unable to download webpage|TLS|SSL|Got error/i.test(msg);
-const isUnsupportedUrl = (msg) => !!msg && /unsupported url/i.test(msg);
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
 
-// Liefert domain-spezifische extractor-args für Stufe 2 der Retry-Kaskade,
-// oder null wenn für diese URL kein passender Age-Gate-Bypass bekannt ist.
-const getAgeGateExtraArgs = (url) => {
-  if (/(?:^|\.)youtube\.com|youtu\.be/i.test(url)) {
-    return ["--extractor-args", "youtube:skip=age_gate"];
-  }
-  return null;
-};
+  // Direkte yt-dlp.exe an bekannten Orten (winget-Shim etc.).
+  pushExe(path.join(localAppData, "Microsoft", "WinGet", "Links", "yt-dlp.exe"));
+  pushExe(path.join(localAppData, "Programs", "yt-dlp", "yt-dlp.exe"));
 
-// Vorbereitung für yt-dlp Download
-const buildYtDlpArgs = ({ url, format, quality, audioQuality, playlistMode, outputFolder, cookiesBrowser, impersonate, embedCoverArt }) => {
-  const args = [
-    "--newline",
-    "--no-colors",
-    "--ignore-config",
-    "--retries",
-    "10",
-    "--fragment-retries",
-    "10",
-    "--concurrent-fragments",
-    "4",
-    "--paths",
-    outputFolder,
-    "--output",
-    "%(title).180B.%(ext)s",
-    "--progress-template",
-    "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s"
+  // Python-Installationen scannen: <base>\Python*\Scripts\yt-dlp.exe und python.exe.
+  const pythonBases = [
+    path.join(localAppData, "Programs", "Python"),
+    "C:\\Python",
+    path.join(appData, "Python")
   ];
-
-  if (format === "mp3") {
-    args.push(
-      "--format",
-      "bestaudio/best",
-      "--extract-audio",
-      "--audio-format",
-      "mp3",
-      "--audio-quality",
-      audioQuality && audioQuality !== "undefined" ? audioQuality : "0"
-    );
-    // Video-Thumbnail als Cover-Art in die MP3 (ID3 APIC) einbetten, wenn gewünscht.
-    if (embedCoverArt) {
-      args.push("--embed-thumbnail");
-    }
-  } else if (format === "audio-raw") {
-    // Nur für die interne Whisper-Vorbereitung: bestes Audio ohne ffmpeg-Reencode.
-    // Whisper sampelt intern ohnehin auf 16 kHz Mono herunter, ein MP3-Reencode
-    // mit Bestqualität davor kostet nur Zeit ohne jeden Nutzen.
-    args.push("--format", "bestaudio/best");
-  } else {
-    // Robuste Format-Auswahl mit mehreren Fallbacks (durch "/" getrennt), damit
-    // möglichst viele Seiten klappen – auch solche ohne getrennte Video/Audio-
-    // Streams oder ohne height-Angabe (Pornhub, GayForFans, generischer Extractor):
-    //   1. bestes Video ≤ Wunschhöhe + bestes Audio (getrennte Streams)
-    //   2. bestes Einzelformat ≤ Wunschhöhe (progressiv)
-    //   3. bestes Video + bestes Audio ohne Höhenlimit
-    //   4. irgendein bestes Format ("best" / "b")
-    let formatString = "bestvideo*+bestaudio/best";
-    if (quality && quality !== "best" && quality !== "undefined") {
-      formatString = `bestvideo*[height<=${quality}]+bestaudio/best[height<=${quality}]/bestvideo*+bestaudio/best`;
-    }
-    args.push(
-      "--format",
-      formatString,
-      "--merge-output-format",
-      "mp4"
-    );
-    // --embed-chapters bettet Kapitelmarken ein, wo die Seite sie liefert
-    // (z. B. YouTube-Kapitel, Twitch-VOD-Marker) – no-op sonst, kostet nichts.
-    args.push("--embed-subs", "--embed-metadata", "--embed-chapters");
-    // Video-Thumbnail als Cover-Art einbetten (attached-pic Stream im MP4),
-    // genau wie bei MP3 – dieselbe Einstellung gilt für beide Formate.
-    if (embedCoverArt) {
-      args.push("--embed-thumbnail");
+  for (const base of pythonBases) {
+    let entries = [];
+    try { entries = fs.readdirSync(base); } catch { continue; }
+    // Absteigend sortieren, damit neuere Python-Versionen (z. B. Python313 vor
+    // Python310) bevorzugt werden – ältere yt-dlp/Python-Stände lösen sonst
+    // Extractor-Fehler aus oder gelten als deprecated.
+    entries.sort().reverse();
+    for (const name of entries) {
+      const dir = path.join(base, name);
+      pushExe(path.join(dir, "Scripts", "yt-dlp.exe"));
+      pushPy(path.join(dir, "python.exe"));
     }
   }
-
-  if (playlistMode === "single-video") {
-    args.push("--no-playlist");
-  }
-
-  if (playlistMode === "playlist-combined") {
-    args.push("--yes-playlist", "--concat-playlist", "always");
-  }
-
-  if (playlistMode === "playlist-items") {
-    args.push("--yes-playlist");
-  }
-
-  // Generische Hebel für breite Seiten-Kompatibilität:
-  // - Browser-Impersonation ahmt einen echten Browser nach (TLS/HTTP2-Fingerprint)
-  //   und umgeht damit Anti-Bot/Cloudflare-Blocks (403/410/429 …) auf vielen Seiten.
-  // - Cookies aus dem Browser schalten Login-/Altersschranken frei.
-  if (impersonate) {
-    args.push("--impersonate", "chrome");
-  }
-  if (cookiesBrowser && cookiesBrowser !== "none") {
-    args.push("--cookies-from-browser", cookiesBrowser);
-  }
-
-  args.push(url);
-  return args;
+  return found;
 };
 
-const getYtDlpCandidates = () => [
-  { command: "yt-dlp", argsPrefix: [] },
-  { command: "python", argsPrefix: ["-m", "yt_dlp"] },
-  { command: "python3", argsPrefix: ["-m", "yt_dlp"] },
-  { command: "py", argsPrefix: ["-m", "yt_dlp"] }
-];
+// Sucht aria2c.exe an bekannten Orten (winget-Shim), falls es nicht im PATH
+// liegt – gleicher Grund wie bei yt-dlp: eine GUI-App erbt den PATH nicht
+// zuverlässig neu, wenn eine Konsolen-Umgebung nach der Installation nicht
+// neu gestartet wurde.
+const findAria2Path = () => {
+  if (process.platform !== "win32") return "aria2c";
+  const exists = (p) => { try { return fs.existsSync(p); } catch { return false; } };
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+  const winGetLink = path.join(localAppData, "Microsoft", "WinGet", "Links", "aria2c.exe");
+  return exists(winGetLink) ? winGetLink : "aria2c";
+};
+
+let discoveredBinariesCache = null;
+const getYtDlpCandidates = () => {
+  if (!discoveredBinariesCache) discoveredBinariesCache = discoverWindowsBinaries();
+  return [
+    { command: "yt-dlp", argsPrefix: [] },
+    ...discoveredBinariesCache,
+    { command: "python", argsPrefix: ["-m", "yt_dlp"] },
+    { command: "python3", argsPrefix: ["-m", "yt_dlp"] },
+    { command: "py", argsPrefix: ["-m", "yt_dlp"] }
+  ];
+};
 
 // Prüft, ob ein Kommando vorhanden ist; gibt die Versionsausgabe (string) oder null zurück.
 const checkCommand = (command, args, env) => new Promise((resolve) => {
@@ -237,11 +216,18 @@ const getDependencyStatus = async () => {
   if (ytDlp) {
     impersonate = await checkCommand(ytDlp.command, [...ytDlp.argsPrefix, "--list-impersonate-targets"]);
   }
+  // aria2c übernimmt (wenn vorhanden) reine HTTP-Downloads mit mehreren echten
+  // parallelen Verbindungen – ein einzelner Stream schafft auf Distanz oft nur
+  // einen Bruchteil der Leitungsgeschwindigkeit (TCP-Fenster/RTT-Limit), egal
+  // wie sehr yt-dlps eigener Downloader optimiert wird.
+  const aria2Path = findAria2Path();
+  const aria2 = await checkCommand(aria2Path, ["--version"]);
   depStatusCache = {
     ytDlpAvailable: !!ytDlp,
     ytDlpVersion: ytDlp ? ytDlp.version : null,
     ffmpegAvailable: !!ffmpeg,
-    impersonateAvailable: !!impersonate && /chrome|edge|safari|firefox/i.test(impersonate)
+    impersonateAvailable: !!impersonate && /chrome|edge|safari|firefox/i.test(impersonate),
+    aria2Path: aria2 ? aria2Path : null
   };
   return depStatusCache;
 };
@@ -260,72 +246,6 @@ const parseProgressLine = (line) => {
     speed: parts[3] || "",
     eta: parts[4] || ""
   };
-};
-
-// Startet headless Chromium via Playwright, lauscht auf Netzwerk-Responses und
-// gibt die erste gefundene Media-URL (.m3u8 / .mp4 / .ts) zurück, oder null.
-// Wirft mit .code PLAYWRIGHT_MISSING / PLAYWRIGHT_CHROMIUM_MISSING bei fehlendem Setup.
-const findStreamWithPlaywright = async (url, sendLog) => {
-  let pw;
-  try {
-    pw = require("playwright");
-  } catch {
-    throw Object.assign(
-      new Error("Playwright nicht installiert. Bitte ausführen: npm install playwright && npx playwright install chromium"),
-      { code: "PLAYWRIGHT_MISSING" }
-    );
-  }
-
-  let browser;
-  try {
-    browser = await pw.chromium.launch({ headless: true });
-  } catch (err) {
-    if (/executable|not found|ENOENT/i.test(err.message)) {
-      throw Object.assign(
-        new Error("Playwright Chromium nicht gefunden. Bitte ausführen: npx playwright install chromium"),
-        { code: "PLAYWRIGHT_CHROMIUM_MISSING" }
-      );
-    }
-    throw err;
-  }
-
-  const page = await browser.newPage();
-  const mediaUrls = new Set();
-
-  page.on("response", (res) => {
-    const u = res.url();
-    if (/\.m3u8(\?|$)|\.mp4(\?|$)|\.ts(\?|$)|\/manifest\b/i.test(u)) {
-      mediaUrls.add(u);
-    }
-  });
-
-  try {
-    sendLog("Playwright: lade Seite in headless Chromium …");
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForTimeout(3_000);
-
-    if (mediaUrls.size === 0) {
-      sendLog("Playwright: kein Stream nach Laden – versuche Play-Klick …");
-      try {
-        const playEl = await page.$(
-          'video, [aria-label*="play" i], [class*="play-btn" i], button[class*="play" i]'
-        );
-        if (playEl) {
-          await playEl.click();
-          await page.waitForTimeout(5_000);
-        }
-      } catch { /* kein Play-Element – weiter */ }
-    }
-
-    // .m3u8 (HLS) bevorzugen, dann .mp4, dann Rest
-    const sorted = [...mediaUrls].sort((a, b) => {
-      const score = (u) => (u.includes(".m3u8") ? 2 : u.includes(".mp4") ? 1 : 0);
-      return score(b) - score(a);
-    });
-    return sorted[0] || null;
-  } finally {
-    await browser.close();
-  }
 };
 
 // Zieldatei aus einer yt-dlp-Logzeile ermitteln (voller, von --paths aufgelöster
@@ -410,10 +330,9 @@ const runDownloadWithCandidate = (candidate, options, runOpts = {}) => new Promi
 // Ermittelt die Thumbnail-URL des Videos über yt-dlp-Metadaten (%(thumbnail)s) –
 // für die Cover-Bild-Anzeige im Verlauf, wenn "Cover-Bild: Thumbnail" aktiv ist.
 const getThumbnailUrl = (candidate, url, cookiesBrowser, impersonate) => new Promise((resolve) => {
-  const args = [...candidate.argsPrefix, "--skip-download", "--no-playlist", "--print", "%(thumbnail)s"];
-  if (impersonate) args.push("--impersonate", "chrome");
-  if (cookiesBrowser && cookiesBrowser !== "none") args.push("--cookies-from-browser", cookiesBrowser);
-  args.push(url);
+  const args = [...candidate.argsPrefix, ...buildPrintArgs({
+    field: "%(thumbnail)s", url, cookiesBrowser, impersonate
+  })];
   try {
     const child = spawn(candidate.command, args, { windowsHide: true });
     let out = "";
@@ -429,63 +348,6 @@ const getThumbnailUrl = (candidate, url, cookiesBrowser, impersonate) => new Pro
     resolve(null);
   }
 });
-
-// ============================================
-// Podcast: RSS-Feed einlesen, Episoden mit direktem Audio-Link zurückgeben.
-// Der eigentliche Download läuft danach über dieselbe MP3-Pipeline wie bei
-// YouTube & Co. – yt-dlps generischer Extractor lädt direkt verlinkte
-// Audiodateien (das "enclosure"-Attribut jeder Episode) genauso wie jede
-// andere URL, kein separater Downloader nötig.
-// ============================================
-
-// Regex-basiert statt mit einem XML-Parser, um keine zusätzliche Abhängigkeit
-// zu brauchen – Podcast-RSS ist strukturell einfach genug (ein <item> pro
-// Episode, ein <enclosure url="…">) dass das robust genug funktioniert.
-const decodeXmlEntities = (s) => String(s || "")
-  .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-  .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-  .replace(/&quot;/g, "\"").replace(/&#0?39;/g, "'")
-  .trim();
-
-const extractTag = (block, tag) => {
-  const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  return m ? decodeXmlEntities(m[1]) : null;
-};
-
-// Begrenzung gegen versehentliches Queuen riesiger Feeds (manche haben 1000+ Folgen).
-// Höher als früher, damit die Folgenauswahl im UI auch bei Feeds mit langem
-// Archiv (mehrere hundert Episoden) die komplette Liste anzeigen kann.
-const MAX_PODCAST_EPISODES = 300;
-
-const resolvePodcastFeed = async (url) => {
-  let res;
-  try {
-    res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-  } catch {
-    throw new Error("Podcast-Feed nicht erreichbar. Internetverbindung/URL prüfen.");
-  }
-  if (!res.ok) throw new Error(`Podcast-Feed konnte nicht geladen werden (${res.status}).`);
-  const xml = await res.text();
-
-  const itemBlocks = xml.match(/<item\b[\s\S]*?<\/item>/gi) || [];
-  if (itemBlocks.length === 0) {
-    throw new Error("Kein gültiger Podcast-RSS-Feed (keine Episoden gefunden).");
-  }
-
-  const episodes = [];
-  for (const block of itemBlocks) {
-    if (episodes.length >= MAX_PODCAST_EPISODES) break;
-    const title = extractTag(block, "title");
-    const enclosureMatch = block.match(/<enclosure[^>]*\surl=["']([^"']+)["'][^>]*>/i);
-    const audioUrl = enclosureMatch ? decodeXmlEntities(enclosureMatch[1]) : null;
-    if (!title || !audioUrl) continue;
-    episodes.push({ title, audioUrl, pubDate: extractTag(block, "pubDate") });
-  }
-  if (episodes.length === 0) {
-    throw new Error("Keine Episoden mit direktem Audio-Link gefunden.");
-  }
-  return episodes;
-};
 
 // Sendet "download:completed" – holt bei MP3/MP4 + aktiviertem Cover-Bild-
 // Setting zusätzlich die Thumbnail-URL für die Anzeige im Verlauf (best effort).
@@ -544,10 +406,9 @@ const resolveWhisperLang = (lang) => (!lang || lang === "auto" || lang === "all"
 // Transkripte. Ohne diese Erkennung würde die alte Prioritätsliste (en, de, …)
 // fast immer die englische Übersetzung statt der Originalsprache liefern.
 const detectVideoLanguage = (candidate, url, cookiesBrowser, impersonate) => new Promise((resolve) => {
-  const args = [...candidate.argsPrefix, "--skip-download", "--no-playlist", "--print", "%(language)s"];
-  if (impersonate) args.push("--impersonate", "chrome");
-  if (cookiesBrowser && cookiesBrowser !== "none") args.push("--cookies-from-browser", cookiesBrowser);
-  args.push(url);
+  const args = [...candidate.argsPrefix, ...buildPrintArgs({
+    field: "%(language)s", url, cookiesBrowser, impersonate
+  })];
   try {
     const child = spawn(candidate.command, args, { windowsHide: true });
     let out = "";
@@ -563,30 +424,6 @@ const detectVideoLanguage = (candidate, url, cookiesBrowser, impersonate) => new
     resolve(null);
   }
 });
-
-const buildSubtitleArgs = ({ url, subLangs, outputFolder, cookiesBrowser, impersonate }) => {
-  const args = [
-    "--newline",
-    "--no-colors",
-    "--ignore-config",
-    "--no-playlist",
-    "--skip-download",
-    "--write-subs",
-    "--write-auto-subs",
-    "--sub-langs",
-    subLangs,
-    "--sub-format",
-    "vtt/srt/best",
-    "--paths",
-    outputFolder,
-    "--output",
-    "%(title).180B.%(ext)s"
-  ];
-  if (impersonate) args.push("--impersonate", "chrome");
-  if (cookiesBrowser && cookiesBrowser !== "none") args.push("--cookies-from-browser", cookiesBrowser);
-  args.push(url);
-  return args;
-};
 
 // VTT/SRT → reiner Text: WEBVTT-Header, Zeitstempel, Cue-Nummern, Inline-Tags und
 // direkte Wiederholungen (typisch bei rollenden Auto-Captions) entfernen.
@@ -848,6 +685,9 @@ ipcMain.handle("download:start", async (_event, options) => {
     return { ok: false, error: "Es läuft bereits ein Download." };
   }
   cancelRequested = false;
+  // Eigener AbortController pro Vorgang: bricht laufende Netzwerk-/Browser-
+  // Schritte der Auflösung ab, wenn der Nutzer abbricht.
+  activeAbortController = new AbortController();
 
   const normalized = {
     url: String(options.url || "").trim(),
@@ -877,116 +717,59 @@ ipcMain.handle("download:start", async (_event, options) => {
   }
 
   const deps = await getDependencyStatus();
-  let lastError;
-  let workingCandidate = null;
+  normalized.aria2Path = deps.aria2Path;
 
-  // Stufe 1: MIT Impersonation (wenn curl_cffi verfügbar), sonst direkt ohne.
-  for (const candidate of getYtDlpCandidates()) {
-    try {
-      sendToRenderer("download:log", `[Stufe 1/5] Starte mit ${candidate.command}${candidate.argsPrefix.length ? ` ${candidate.argsPrefix.join(" ")}` : ""}${deps.impersonateAvailable ? " (Impersonation: chrome)" : ""}`);
-      const filePath = await runDownloadWithCandidate(candidate, normalized, { impersonate: deps.impersonateAvailable });
-      await sendDownloadCompleted(normalized, filePath, candidate, deps);
-      return { ok: true };
-    } catch (error) {
-      lastError = error;
-      if (error.code !== "ENOENT") {
-        workingCandidate = candidate;
-        break;
-      }
-      sendToRenderer("download:log", error.message);
+  // --- Auflösung: URL → SiteResolver → Provider-URL → ProviderResolver ---
+  const logger = createResolveLogger();
+  const context = buildResolveContext({
+    cookiesBrowser: normalized.cookiesBrowser,
+    playwrightFallback: normalized.playwrightFallback,
+    signal: activeAbortController ? activeAbortController.signal : undefined,
+    logger
+  });
+
+  let media;
+  try {
+    media = await resolverManager.resolveOne(normalized.url, context);
+  } catch (err) {
+    const resolveError = toResolveError(err, { url: normalized.url });
+    if (resolveError.code === ResolveErrorCode.CANCELLED || cancelRequested) {
+      return { ok: false };
     }
+    // Kein Resolver zuständig: die Eingabe geht trotzdem an yt-dlp. Das deckt
+    // Sonderformen ab, die kein Resolver abbilden muss (ytsearch:, lokale
+    // Pfade) und hält das bisherige Verhalten exakt bei.
+    sendToRenderer("download:log", `[Auflösung] ${resolveError.code}: ${resolveError.message}`);
+    media = { sourceUrl: normalized.url, mediaUrl: normalized.url, provider: "yt-dlp" };
   }
 
-  if (workingCandidate && deps.impersonateAvailable) {
-    // Stufe 2: Impersonation + domain-spezifische Age-Gate-Args (nur wenn bekannt).
-    // Für Pornhub/generische Seiten gibt getAgeGateExtraArgs() null zurück → Stufe überspringen.
-    const ageGateArgs = getAgeGateExtraArgs(normalized.url);
-    if (ageGateArgs) {
-      try {
-        sendToRenderer("download:log", "[Stufe 2/5] Erneuter Versuch mit Age-Gate-Bypass …");
-        const filePath = await runDownloadWithCandidate(workingCandidate, normalized, {
-          impersonate: true,
-          extraArgs: ageGateArgs
-        });
-        await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
-        return { ok: true };
-      } catch (error) {
-        lastError = error;
-      }
-    }
+  const result = await runDownloadCascade({
+    media,
+    options: normalized,
+    deps,
+    candidates: getYtDlpCandidates(),
+    runDownload: runDownloadWithCandidate,
+    // Stufe 5 fragt gezielt die Browser-/Session-basierte Extraktion an.
+    resolveStream: (url) => resolverManager.resolveProvider(url, context, {
+      only: ["playwright-sniffer"]
+    }),
+    isCancelled: () => cancelRequested,
+    log: (line) => sendToRenderer("download:log", line),
+    logger
+  });
 
-    // Stufe 3: Fallback ohne Impersonation (für Seiten, die curl_cffi-TLS ablehnen).
-    try {
-      sendToRenderer("download:log", "[Stufe 3/5] Fallback: Versuch ohne Browser-Impersonation …");
-      const filePath = await runDownloadWithCandidate(workingCandidate, normalized, { impersonate: false });
-      await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
-      return { ok: true };
-    } catch (error) {
-      lastError = error;
-    }
+  if (result.ok) {
+    await sendDownloadCompleted(normalized, result.filePath, result.candidate, deps);
+    return { ok: true };
   }
 
-  // Stufe 4: Kein Extractor gefunden → Generic-Extractor erzwingen (Standard-Embeds).
-  if (workingCandidate && isUnsupportedUrl(lastError && lastError.message)) {
-    try {
-      sendToRenderer("download:log", "[Stufe 4/5] Kein Extractor – Versuch mit Generic-Extractor …");
-      const filePath = await runDownloadWithCandidate(workingCandidate, normalized, {
-        impersonate: deps.impersonateAvailable,
-        extraArgs: ["--force-generic-extractor"]
-      });
-      await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
-      return { ok: true };
-    } catch (error) {
-      lastError = error;
-    }
+  // Nach einem Abbruch hat download:cancel bereits "Download abgebrochen."
+  // gemeldet - keine zweite Fehlermeldung hinterherschicken.
+  if (cancelRequested) {
+    return { ok: false };
   }
 
-  // Stufe 5: Playwright-Fallback für JS-gerenderte Seiten (nur wenn per Setting aktiviert).
-  // Greift nur wenn Stufe 4 weiterhin "Unsupported URL" liefert — nicht bei 4xx/anderen Fehlern.
-  if (workingCandidate && normalized.playwrightFallback && isUnsupportedUrl(lastError && lastError.message)) {
-    sendToRenderer("download:log", "[Stufe 5/5] Playwright-Fallback: headless Browser analysiert Seite …");
-    try {
-      const streamUrl = await findStreamWithPlaywright(
-        normalized.url,
-        (msg) => sendToRenderer("download:log", msg)
-      );
-      if (streamUrl) {
-        sendToRenderer("download:log", `Playwright: Stream-URL gefunden – übergebe an yt-dlp …`);
-        const filePath = await runDownloadWithCandidate(workingCandidate, { ...normalized, url: streamUrl }, {
-          impersonate: deps.impersonateAvailable
-        });
-        await sendDownloadCompleted(normalized, filePath, workingCandidate, deps);
-        return { ok: true };
-      }
-      lastError = Object.assign(new Error("Kein Stream gefunden"), { code: "PLAYWRIGHT_NO_STREAM" });
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  let message;
-  if (lastError && lastError.code === "ENOENT") {
-    message = "yt-dlp wurde nicht gefunden. Bitte installiere yt-dlp (z. B. \"pip install yt-dlp\") und stelle sicher, dass es im PATH liegt.";
-  } else if (lastError && lastError.code === "PLAYWRIGHT_NO_STREAM") {
-    message = "Seite nicht unterstützt (JS-Rendering, kein Stream gefunden).";
-  } else if (lastError && (lastError.code === "PLAYWRIGHT_MISSING" || lastError.code === "PLAYWRIGHT_CHROMIUM_MISSING")) {
-    message = lastError.message; // bereits klarer Hinweis aus findStreamWithPlaywright
-  } else {
-    message = lastError ? lastError.message : "Unbekannter Download-Fehler.";
-    if (isUnsupportedUrl(message)) {
-      message = "Diese Seite wird von yt-dlp nicht unterstützt. Es wurde kein passender Extractor gefunden und der Generic-Extractor konnte kein Video erkennen.";
-      if (!normalized.playwrightFallback) {
-        message += " Tipp: Den Playwright-Fallback in den Einstellungen aktivieren, um JS-gerenderte Seiten zu unterstützen.";
-      }
-    } else {
-      if (!deps.ffmpegAvailable) {
-        message += " Hinweis: ffmpeg wurde nicht gefunden – für die MP4-Zusammenführung und MP3-Konvertierung ist ffmpeg zwingend erforderlich.";
-      }
-      if (looksLikeBlock(message) || /sign in|login|age|verify|cookies?|private|members?-only/i.test(message)) {
-        message += " Tipp: yt-dlp aktualisieren (pip install -U yt-dlp). Für anti-bot-geschützte Seiten Browser-Impersonation aktivieren (curl_cffi: pip install \"yt-dlp[default]\"). Für Login-/Altersschranken in den Einstellungen die Browser-Cookies wählen.";
-      }
-    }
-  }
+  const message = buildFailureMessage(result.error, { options: normalized, deps });
   sendToRenderer("download:failed", message);
   return { ok: false, error: message };
 });
@@ -994,9 +777,22 @@ ipcMain.handle("download:start", async (_event, options) => {
 // Podcast: RSS-Feed-Link → Liste von Episoden {title, audioUrl, pubDate}.
 // Lädt selbst nichts herunter, nur den Feed – der Download läuft danach ganz
 // normal über download:start (jede Episode ist eine eigene MP3-URL).
+//
+// Läuft über den PodcastFeedSiteResolver: ein SiteResolver, der mehrere
+// Provider-Referenzen (eine pro Episode) liefert. Bewusst ohne Ausweichen auf
+// den generischen Resolver – hier ist wirklich ein Feed gemeint.
 ipcMain.handle("podcast:resolve", async (_event, url) => {
   try {
-    const episodes = await resolvePodcastFeed(url);
+    const references = await resolverManager.resolveSite(
+      String(url || "").trim(),
+      buildResolveContext({ logger: createResolveLogger() }),
+      { only: ["podcast-rss"] }
+    );
+    const episodes = references.map((media) => ({
+      title: media.title,
+      audioUrl: downloadUrlOf(media),
+      pubDate: (media.meta && media.meta.pubDate) || null
+    }));
     return { ok: true, episodes };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : "Podcast-Feed konnte nicht gelesen werden." };
@@ -1006,6 +802,11 @@ ipcMain.handle("podcast:resolve", async (_event, url) => {
 // Download cancel
 ipcMain.handle("download:cancel", () => {
   cancelRequested = true;
+  // Laufende Auflösungsschritte (Feed-Abruf, headless Browser) beenden.
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  }
   if (!activeDownload) {
     return { ok: true };
   }

@@ -190,7 +190,7 @@ function IconGear() {
 function VelaApp() {
   const [url, setUrl] = useState('');
   const [format, setFormat] = useState('video');
-  const [quality, setQuality] = useState('1080p');
+  const [quality, setQuality] = useState('best');
   const [transcriptLang, setTranscriptLang] = useState('auto');
   const [whisperModel, setWhisperModel] = useState('base');
   const [playlistMode, setPlaylistMode] = useState('single');
@@ -646,7 +646,7 @@ function VelaApp() {
 
   // Format-Optionen
   const qualityOptions = format === 'video'
-    ? [{ value: '480p', label: '480p SD' }, { value: '720p', label: '720p HD' }, { value: '1080p', label: '1080p FHD' }, { value: '2160p', label: '4K UHD' }]
+    ? [{ value: 'best', label: 'Beste verfügbare' }, { value: '480p', label: '480p SD' }, { value: '720p', label: '720p HD' }, { value: '1080p', label: '1080p FHD' }, { value: '2160p', label: '4K UHD' }]
     : [{ value: '128k', label: '128 kbps' }, { value: '192k', label: '192 kbps' }, { value: '256k', label: '256 kbps' }, { value: '320k', label: '320 kbps (best)' }];
 
   // Sprach-Optionen für das Transkript (Untertitel-Auswahl bzw. Whisper-Sprache).
@@ -784,7 +784,7 @@ function VelaApp() {
         </div>
       )}
       <div className="opts-row">
-        {FormatToggle({ value: format, disabled: disabledFormats, onChange: (v) => { setFormat(v); if (v === 'video') setQuality('1080p'); else if (v === 'audio') setQuality('256k'); } })}
+        {FormatToggle({ value: format, disabled: disabledFormats, onChange: (v) => { setFormat(v); if (v === 'video') setQuality('best'); else if (v === 'audio') setQuality('256k'); } })}
         {format !== 'transcript' && <div style={{ width: 155 }}><Select value={quality} onChange={setQuality} options={qualityOptions} /></div>}
         <div style={{ flex: 1 }} />
         <button className="settings-btn" onClick={() => setShowSettings(true)} aria-label="Einstellungen" title="Einstellungen">

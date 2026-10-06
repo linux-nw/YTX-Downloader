@@ -1,0 +1,325 @@
+/**
+ * ResolverManager: verdrahtet die Pipeline
+ *
+ *   Input URL -> SiteResolver -> Provider-URL(s) -> ProviderResolver
+ *             -> ResolvedMedia[] -> Downloader
+ *
+ * Aufgaben laut Architektur:
+ * - passenden Site-/ProviderResolver automatisch finden (über die Registry),
+ * - Resolver nach Priorität testen,
+ * - Fehler einzelner Resolver isolieren (FallbackManager),
+ * - mehrere Kandidaten je Seite unterstützen,
+ * - Ergebnisse auf ResolvedMedia normalisieren,
+ * - Zwischenergebnisse cachen, solange keine Auth im Spiel ist.
+ */
+
+const { ResolverRegistry } = require("./registry");
+const { FallbackManager } = require("./FallbackManager");
+const { STEP, nullLogger } = require("./logger");
+const { normalizeMedia, isHttpUrl, downloadUrlOf } = require("./types");
+const {
+  ResolveError,
+  ResolveErrorCode,
+  toResolveError,
+  pickMostRelevantError
+} = require("./errors");
+const { hasAuth } = require("../auth/AuthContext");
+const { ResolverCache } = require("../cache/ResolverCache");
+
+/**
+ * Führt die Referenz aus dem SiteResolver mit dem Provider-Ergebnis zusammen.
+ * Titel, Thumbnail und Metadaten der Seite bleiben erhalten, das
+ * Provider-Ergebnis gewinnt bei Konflikten. Die Quelle bleibt aber immer die
+ * ursprüngliche Seite, nicht die Hoster-URL.
+ *
+ * @param {Object} base     Referenz aus dem SiteResolver (kann leer sein)
+ * @param {Object} resolved Ergebnis des ProviderResolvers
+ * @param {string} url      aufgelöste Provider-URL
+ */
+const mergeWithBase = (base, resolved, url) => normalizeMedia(
+  {
+    ...base,
+    ...resolved,
+    sourceUrl: base.sourceUrl || resolved.sourceUrl || url,
+    meta: (base.meta || resolved.meta) ? { ...base.meta, ...resolved.meta } : undefined
+  },
+  { sourceUrl: url }
+);
+
+class ResolverManager {
+  /**
+   * @param {Object} [options]
+   * @param {ResolverRegistry} [options.sites]
+   * @param {ResolverRegistry} [options.providers]
+   * @param {ResolverCache|null} [options.cache]
+   * @param {Object} [options.logger]
+   */
+  constructor(options = {}) {
+    this.sites = options.sites || new ResolverRegistry({ kind: "SiteResolver" });
+    this.providers = options.providers || new ResolverRegistry({ kind: "ProviderResolver" });
+    this.cache = options.cache === undefined ? null : options.cache;
+    this.logger = options.logger || nullLogger();
+  }
+
+  /** Kurzform für die Registrierung beim Aufbau der App. */
+  registerSite(resolver, options) {
+    this.sites.register(resolver, options);
+    return this;
+  }
+
+  registerProvider(resolver, options) {
+    this.providers.register(resolver, options);
+    return this;
+  }
+
+  /** Diagnose: was ist registriert, in welcher Reihenfolge wird getestet. */
+  describe() {
+    return { sites: this.sites.describe(), providers: this.providers.describe() };
+  }
+
+  _loggerFor(context) {
+    return (context && context.logger) || this.logger;
+  }
+
+  /** Cache nur nutzen, wenn kein Auth-Material im Spiel ist. */
+  _cacheFor(context) {
+    if (!this.cache) return null;
+    if (context && hasAuth(context.auth)) return null;
+    return this.cache;
+  }
+
+  /**
+   * Schritt 1: Seite erkennen und Provider-Referenzen extrahieren.
+   *
+   * @param {string} url
+   * @param {Object} context ResolveContext
+   * @returns {Promise<import("./types").ResolvedMedia[]>}
+   */
+  async resolveSite(url, context = {}, options = {}) {
+    const logger = this._loggerFor(context);
+    this._assertUsableUrl(url);
+
+    const candidates = this._pickResolvers(this.sites, url, context, options);
+    if (candidates.length === 0) {
+      throw new ResolveError(
+        ResolveErrorCode.UNSUPPORTED_URL,
+        "Kein SiteResolver für diese URL registriert.",
+        { url }
+      );
+    }
+
+    const fallback = new FallbackManager({ logger });
+    const result = await fallback.run(candidates.map((resolver) => ({
+      name: resolver.name,
+      run: async () => {
+        if (context.throwIfAborted) context.throwIfAborted();
+        const raw = await resolver.resolve(url, context);
+        const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        const media = list.map((item) => normalizeMedia(item, {
+          sourceUrl: url,
+          resolver: resolver.name
+        }));
+        return media.length ? media : null;
+      }
+    })));
+
+    if (!result.ok) {
+      throw result.error || new ResolveError(
+        ResolveErrorCode.EXTRACTION_FAILED,
+        "Kein SiteResolver konnte die Seite auswerten.",
+        { url }
+      );
+    }
+
+    logger.step(STEP.SITE_DETECTED, {
+      site: result.stage,
+      url,
+      count: result.value.length
+    });
+
+    const cache = this._cacheFor(context);
+    if (cache) cache.rememberDetection("site", url, result.stage);
+
+    return result.value;
+  }
+
+  /**
+   * Schritt 2: eine einzelne Provider-/Hoster-URL zu einer Medien-URL auflösen.
+   *
+   * @param {string} url
+   * @param {Object} context
+   * @param {{ base?: Object }} [options] base = Referenz aus dem SiteResolver
+   * @returns {Promise<import("./types").ResolvedMedia>}
+   */
+  async resolveProvider(url, context = {}, options = {}) {
+    const logger = this._loggerFor(context);
+    this._assertUsableUrl(url);
+    const base = options.base || {};
+
+    const cache = this._cacheFor(context);
+    const cacheKey = ResolverCache.keyFor("provider", url);
+    if (cache) {
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        logger.step(STEP.CACHE_HIT, { url, provider: cached.provider || null });
+        return mergeWithBase(base, cached, url);
+      }
+    }
+
+    const candidates = this._pickResolvers(this.providers, url, context, options);
+    if (candidates.length === 0) {
+      throw new ResolveError(
+        ResolveErrorCode.UNSUPPORTED_URL,
+        "Kein ProviderResolver für diese URL registriert.",
+        { url }
+      );
+    }
+
+    const fallback = new FallbackManager({ logger });
+    const result = await fallback.run(candidates.map((resolver) => ({
+      name: resolver.name,
+      run: async () => {
+        if (context.throwIfAborted) context.throwIfAborted();
+        const raw = await resolver.resolve(url, context);
+        if (!raw) return null;
+        return normalizeMedia(raw, {
+          sourceUrl: base.sourceUrl || url,
+          resolver: resolver.name
+        });
+      }
+    })));
+
+    if (!result.ok) {
+      throw result.error || new ResolveError(
+        ResolveErrorCode.EXTRACTION_FAILED,
+        "Kein ProviderResolver konnte die URL auflösen.",
+        { url }
+      );
+    }
+
+    const media = mergeWithBase(base, result.value, url);
+
+    logger.step(STEP.PROVIDER_DETECTED, {
+      resolver: result.stage,
+      provider: media.provider || null,
+      url: media.mediaUrl || url
+    });
+
+    if (cache && !media.requiresAuth) cache.set(cacheKey, media);
+    return media;
+  }
+
+  /**
+   * Komplette Pipeline: URL -> Site -> Provider -> normalisierte Ergebnisse.
+   *
+   * Einzelne Kandidaten dürfen scheitern, ohne den Rest mitzureißen. Erst wenn
+   * kein einziger Kandidat auflösbar ist, wirft die Methode den
+   * aussagekräftigsten Fehler.
+   *
+   * @param {string} url
+   * @param {Object} context
+   * @returns {Promise<import("./types").ResolvedMedia[]>}
+   */
+  async resolve(url, context = {}, options = {}) {
+    const logger = this._loggerFor(context);
+    logger.step(STEP.INPUT, { url });
+
+    const references = await this.resolveSite(url, context, { only: options.sites });
+
+    const resolved = [];
+    const errors = [];
+    for (const reference of references) {
+      if (context.throwIfAborted) context.throwIfAborted();
+      // Hat der SiteResolver bereits eine direkte Medien-URL geliefert, ist
+      // kein Provider-Schritt nötig (z. B. eingebettete Direktdatei).
+      if (reference.mediaUrl) {
+        resolved.push(reference);
+        continue;
+      }
+      const target = reference.providerUrl || reference.sourceUrl;
+      try {
+        resolved.push(await this.resolveProvider(target, context, {
+          base: reference,
+          only: options.providers
+        }));
+      } catch (err) {
+        const error = toResolveError(err, { url: target });
+        errors.push(error);
+        logger.step(STEP.RESOLVER_FAIL, {
+          url: target,
+          code: error.code,
+          message: error.message
+        });
+        if (error.code === ResolveErrorCode.CANCELLED) throw error;
+      }
+    }
+
+    if (resolved.length === 0) {
+      throw pickMostRelevantError(errors) || new ResolveError(
+        ResolveErrorCode.EXTRACTION_FAILED,
+        "Es konnte kein Medium aufgelöst werden.",
+        { url }
+      );
+    }
+
+    logger.step(STEP.RESULT, {
+      url,
+      count: resolved.length,
+      provider: resolved[0].provider || null,
+      message: errors.length ? `${errors.length} Kandidat(en) fehlgeschlagen` : undefined
+    });
+
+    return resolved;
+  }
+
+  /**
+   * Bequemlichkeit für den Download: genau ein Ergebnis (das erste).
+   * @param {string} url
+   * @param {Object} context
+   * @returns {Promise<import("./types").ResolvedMedia>}
+   */
+  async resolveOne(url, context = {}, options = {}) {
+    const list = await this.resolve(url, context, options);
+    return list[0];
+  }
+
+  _assertUsableUrl(url) {
+    if (typeof url !== "string" || !url.trim()) {
+      throw new ResolveError(ResolveErrorCode.UNSUPPORTED_URL, "Es wurde keine URL übergeben.");
+    }
+    if (!isHttpUrl(url)) {
+      throw new ResolveError(
+        ResolveErrorCode.UNSUPPORTED_URL,
+        `Keine gültige http(s)-URL: ${url}`,
+        { url }
+      );
+    }
+  }
+
+  /**
+   * Kandidaten aus einer Registry holen, nach Priorität sortiert.
+   *
+   * options.only schränkt auf bestimmte Resolver ein. Das braucht die App,
+   * wenn ein bestimmter Ablauf gemeint ist (Podcast-Feed einlesen, gezielt
+   * die Browser-Extraktion anstoßen) und ein Ausweichen auf den generischen
+   * Resolver ein falsches Ergebnis liefern würde.
+   *
+   * @param {Object} registry
+   * @param {string} url
+   * @param {Object} context
+   * @param {{ only?: string[] }} [options]
+   */
+  _pickResolvers(registry, url, context, options = {}) {
+    const logger = this._loggerFor(context);
+    const matches = registry.match(url, { logger });
+    const only = Array.isArray(options.only) ? options.only : null;
+    if (!only || only.length === 0) return matches;
+
+    const selected = only
+      .map((name) => matches.find((r) => r.name === name) || registry.get(name))
+      .filter(Boolean);
+    return selected;
+  }
+}
+
+module.exports = { ResolverManager, downloadUrlOf };
