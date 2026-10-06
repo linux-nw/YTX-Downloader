@@ -23,6 +23,21 @@ const {
   ALLOWED_BROWSERS
 } = require("./downloader");
 
+// Mitgelieferte Programme (yt-dlp, ffmpeg/ffprobe, deno, aria2c), siehe
+// scripts/fetch-binaries.js. Installiert: resources/bin, im Dev-Modus: vendor/bin.
+// Vorne in den PATH, damit sowohl unsere Aufrufe als auch yt-dlp selbst
+// (ffmpeg, ffprobe, deno) zuerst die mitgelieferten Versionen finden.
+const BUNDLED_BIN_DIR = app.isPackaged
+  ? path.join(process.resourcesPath, "bin")
+  : path.join(__dirname, "..", "vendor", "bin");
+if (fs.existsSync(BUNDLED_BIN_DIR)) {
+  process.env.PATH = `${BUNDLED_BIN_DIR}${path.delimiter}${process.env.PATH || ""}`;
+}
+const bundledExe = (name) => {
+  const p = path.join(BUNDLED_BIN_DIR, process.platform === "win32" ? `${name}.exe` : name);
+  return fs.existsSync(p) ? p : null;
+};
+
 let mainWindow;
 let activeDownload = null;
 // Bricht laufende Auflösungen (fetch, headless Browser) beim Abbrechen ab.
@@ -166,6 +181,8 @@ const discoverWindowsBinaries = () => {
 // zuverlässig neu, wenn eine Konsolen-Umgebung nach der Installation nicht
 // neu gestartet wurde.
 const findAria2Path = () => {
+  const bundled = bundledExe("aria2c");
+  if (bundled) return bundled;
   if (process.platform !== "win32") return "aria2c";
   const exists = (p) => { try { return fs.existsSync(p); } catch { return false; } };
   const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
@@ -176,7 +193,9 @@ const findAria2Path = () => {
 let discoveredBinariesCache = null;
 const getYtDlpCandidates = () => {
   if (!discoveredBinariesCache) discoveredBinariesCache = discoverWindowsBinaries();
+  const bundled = bundledExe("yt-dlp");
   return [
+    ...(bundled ? [{ command: bundled, argsPrefix: [] }] : []),
     { command: "yt-dlp", argsPrefix: [] },
     ...discoveredBinariesCache,
     { command: "python", argsPrefix: ["-m", "yt_dlp"] },
@@ -210,7 +229,7 @@ const getDependencyStatus = async () => {
       break;
     }
   }
-  const ffmpeg = await checkCommand("ffmpeg", ["-version"]);
+  const ffmpeg = await checkCommand(bundledExe("ffmpeg") || "ffmpeg", ["-version"]);
   // Impersonation verfügbar, wenn yt-dlp echte Targets auflistet (braucht curl_cffi).
   let impersonate = null;
   if (ytDlp) {
